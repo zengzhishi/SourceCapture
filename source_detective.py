@@ -7,7 +7,6 @@ import sys
 import subprocess
 import Queue
 
-
 def get_system_path():
     """
     获取gcc系统头文件路径
@@ -98,12 +97,11 @@ def get_present_path2(root_path, prefers):
             suffix = slice[-1]
             if len(slice) > 1:
                 if suffix in source_file_suffix:
-                    output_name_prefix = folder[len(root_path_length) + 1:].replace("/", "_")
+                    output_name_prefix = folder[root_path_length + 1:].replace("/", "_")
                     files_s.append((folder + "/" + file_name, output_name_prefix))
                     files_s_defs.append(definition)
                 elif suffix in include_file_suffix:
-                    files_h.append(folder + "/" + file_path)
-                    paths.append(folder)
+                    files_h.append(folder + "/" + file_name)
     return paths, files_s, files_h, files_s_defs
 
 
