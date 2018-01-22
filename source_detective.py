@@ -72,34 +72,38 @@ def selective_walk(root_path, prefers):
                 else:
                     to_walks.put((file_path, definitions))
             else:
-                files.append(file_path)
+                files.append(file_name)
         level = 1
         yield (present_path, files, def_str)
 
 
 def get_present_path2(root_path, prefers):
     if len(prefers) == 0:
-        prefers = ["src", "include", "lib"]
+        prefers = ["src", "include", "lib", "modules"]
     source_file_suffix = set("cpp, c, cc")
     include_file_suffix = set("h, hpp")
+
+    root_path_length = len(root_path)
     paths = []
     files_s_defs = []
     files_s = []
     files_h = []
     for line_tulpe in selective_walk(root_path, prefers):
         folder = line_tulpe[0]
-        file_paths = line_tulpe[1]
+        file_names = line_tulpe[1]
         definition = line_tulpe[2]
         paths.append(folder)
-        for file_path in file_paths:
-            slice = file_path.split('.')
+        for file_name in file_names:
+            slice = file_name.split('.')
             suffix = slice[-1]
             if len(slice) > 1:
                 if suffix in source_file_suffix:
-                    files_s.append(file_path)
+                    output_name_prefix = folder[len(root_path_length) + 1:].replace("/", "_")
+                    files_s.append((folder + "/" + file_name, output_name_prefix))
                     files_s_defs.append(definition)
                 elif suffix in include_file_suffix:
-                    files_h.append(file_path)
+                    files_h.append(folder + "/" + file_path)
+                    paths.append(folder)
     return paths, files_s, files_h, files_s_defs
 
 
@@ -137,7 +141,6 @@ def get_dir(path):
     return paths
 
 
-
 if __name__ == "__main__":
     output_path = ""
     if len(sys.argv) == 2:
@@ -157,6 +160,9 @@ if __name__ == "__main__":
         ./program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path]
 """)
         sys.exit()
+
+    if len(input_path) > 1 and input_path[-1] == '/':
+        input_path = input_path[:-1]
 
     # 设置编译脚本输出目录
     command_output_path = input_path
@@ -185,7 +191,8 @@ if __name__ == "__main__":
         gcc_string += " -DHAVE_CONFIG_H"
 
     with open(command_output_path + "/" + "my_compile.sh", "w+") as fout:
-        for source_file, definition in zip(files_s, files_s_defs):
+        for source_file_tuple, definition in zip(files_s, files_s_defs):
+            source_file = source_file_tuple[0]
             suffix = source_file.split(".")[-1]
             index = -(len(suffix))
             file_name = source_file.split("/")[-1]
@@ -193,7 +200,7 @@ if __name__ == "__main__":
             output_path_str = output_path
             if not output_path_str:
                 output_path_str = source_file[:file_index]
-            output_file_path = output_path_str + "/" + file_name[:index] + "o"
+            output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
             makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
             fout.write(makestring + "\n")
     print "complete"
