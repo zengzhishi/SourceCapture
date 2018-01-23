@@ -18,7 +18,8 @@ def get_system_path():
     """
     获取gcc系统头文件路径
     """
-    cmd = """touch /tmp/test.c; gcc -v test.c >out.detail 2>&1 ; grep "include" out.detail | grep "^\ /" """
+    cmd = """echo 'main(){}' | gcc -E -x c -v -"""                              # 查询 c 系统头文件路径
+    cpp_cmd = """echo 'main(){}' | gcc -E -x c++ -v -"""                        # 查询 c++ 系统头文件路径
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     retval = p.wait()
     lines = []

@@ -5,13 +5,59 @@
     @FileName: capture.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-23 11:27:56
-    @LastModif: 2018-01-23 14:09:38
+    @LastModif: 2018-01-23 19:49:44
     @Note:
 """
 
 import os
 import sys
 import json
+import hashlib
+
+def bigFileMD5Calc(file):
+    """逐步更新计算文件MD5"""
+    m = md5()
+    buffer = 8192   # why is 8192 | 8192 is fast than 2048
+
+    m.update(file)  # 加入文件的路径，使得不同目录即使文件内容相同，也能生成不同的MD5值
+    with open(file, 'rb') as f:
+        while True:
+            chunk = f.read(buffer)
+            if not chunk:
+                break
+            m.update(chunk)
+
+    return m.hexdigest()
+
+
+def fileMD5Calc(file):
+    """直接读取计算文件MD5"""
+    m = md5()
+    m.update(file)
+    with open(file, 'rb') as f:
+        m.update(f.read())
+
+    return m.hexdigest()
+
+
+def file_transfer(filename, path):
+    """文件名转换"""
+    file = path + "/" + filename, "rb"
+    statinfo = os.stat(file)
+    if int(statinfo.st_size) / 1024 * 1024 >= 1:
+        print "File size > 1M, use big file calc"
+        return bigFileMD5Calc(file)
+    return fileMD5Calc(file)
+
+
+def file_info_save(redis_conf, filename, source_path, transfer_name, flags):
+    """保存源文件信息到redis中"""
+    # TODO 构建一份 redis conf 文件
+    return
+
+def get_file_info(redis_conf, transfer_name):
+    """利用transfer_name获取源文件编译信息"""
+    return
 
 def commands_dump(output_path, source_files, commands, working_paths):
     """导出生成的编译命令
@@ -32,6 +78,7 @@ def commands_dump(output_path, source_files, commands, working_paths):
     with open(output_path, 'w') as fout:
         json.dump(json_body, fout, indent=4)
     return
+
 
 def scan_data_dump(output_path, source_files, macros, include_files, \
         include_paths, is_has_config=False):
