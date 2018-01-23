@@ -6,6 +6,13 @@ import os
 import sys
 import subprocess
 import Queue
+import logging
+import logging.config
+import parse_logger
+
+#logging.config.fileConfig("logging.conf")
+#logger = logging.getLogger("compileLog")
+
 
 def get_system_path():
     """
@@ -162,10 +169,15 @@ if __name__ == "__main__":
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
 
-    # 设置编译脚本输出目录
+
+    # 设置编译脚本输出目录和日志输出
+    logger_builder = parse_logger.logger_analysis("capture.cfg")
     command_output_path = input_path
     if output_path:
         command_output_path = output_path
+        logger = logger_builder.get_Logger("simpleExample", output_path + "/capture.log")
+    else:
+        logger = logger_builder.get_Logger("simpleExample", "capture.log")
 
     if prefers_str == "":
         prefers = []
@@ -181,6 +193,7 @@ if __name__ == "__main__":
     gcc_include_string = ""
     for path in sub_paths:
         gcc_include_string = gcc_include_string + " " + "-I" + path
+
 
     gcc_string = "gcc"
     print input_path + "/configure"
@@ -201,5 +214,5 @@ if __name__ == "__main__":
             output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
             makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
             fout.write(makestring + "\n")
-    print "complete"
+    logger.info("complete")
 
