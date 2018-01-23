@@ -5,7 +5,7 @@
     @FileName: parse_logger.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-22 17:45:26
-    @LastModif: 2018-01-23 10:43:53
+    @LastModif: 2018-01-23 13:25:25
     @Note:
 """
 
@@ -108,7 +108,7 @@ class logger_analysis(object):
         logger = self.loggers[name]
         formatter = logger.handlers[0].formatter
         if filepath:
-            rfh = logging.FileHandler(filepath)
+            rfh = logging.FileHandler(filepath, mode='w')
             rfh.setFormatter(formatter)
             logger.removeHandler(logger.handlers[0])
             logger.addHandler(rfh)

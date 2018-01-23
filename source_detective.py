@@ -18,7 +18,7 @@ def get_system_path():
     """
     获取gcc系统头文件路径
     """
-    cmd = """cat out.detail | grep "include" | grep "^\ /" """
+    cmd = """touch /tmp/test.c; gcc -v test.c >out.detail 2>&1 ; grep "include" out.detail | grep "^\ /" """
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     retval = p.wait()
     lines = []
@@ -31,6 +31,7 @@ def get_system_path():
 
 
 def get_definitions(path):
+    ## TODO 可以选择一个类来封装，使得该方法可以被重写
     """获取当前路径下Makefile.am中的宏定义"""
     cmd = "grep \"^AM_CPPFLAGS*\" " + path + "/Makefile.am | awk '{print $3}'"
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -76,7 +77,8 @@ def selective_walk(root_path, prefers):
                     if file_path in prefer_paths:
                         to_walks.put((file_path, definitions))
                 else:
-                    to_walks.put((file_path, definitions))
+                    if file_name[0] != '.':                         # 排除了隐藏文件
+                        to_walks.put((file_path, definitions))
             else:
                 files.append(file_name)
         level = 1
@@ -84,6 +86,18 @@ def selective_walk(root_path, prefers):
 
 
 def get_present_path2(root_path, prefers):
+    """
+    Args:
+        root_path:          项目根目录
+        prefers:            关注路径（全选时，可能会出现example等涉及到未安装对应库的文件失败，
+                            因为configure的环境一般不管范例里面涉及的额外模块）。
+
+    Returns:
+        sub_paths:          子目录（用于添加include路径）
+        source_files:       源文件
+        include_files:      头文件
+        source_defs:        源文件编译所需要的宏定义（与源文件一一对应）
+    """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
     source_file_suffix = set("cpp, c, cc")
@@ -179,28 +193,50 @@ if __name__ == "__main__":
     else:
         logger = logger_builder.get_Logger("simpleExample", "capture.log")
 
+    logger.info("Loading config complete")
+
     if prefers_str == "":
         prefers = []
     elif prefers_str == "all":
         prefers = get_dir(input_path)
     else:
         prefers = prefers_str.split(",")
-    include_paths = []
+    logger.debug("prefer directories: " + str(prefers))
+
+    logger.info("Start Scaning project folders...")
     # system_paths, status = get_system_path()
     sub_paths, files_s, files_h, files_s_defs = get_present_path2(input_path, prefers)
+    logger.info("End of Scaning project folders...")
 
     # add Include path
     gcc_include_string = ""
     for path in sub_paths:
         gcc_include_string = gcc_include_string + " " + "-I" + path
 
-
+    # TODO 对输出命令进行构建，可以抽取成一个单独的模块
     gcc_string = "gcc"
-    print input_path + "/configure"
-    if os.path.exists(input_path + "/configure"):
-        print "*" * 40
+
+    logger.info("checking configure file...")
+    is_has_configure = os.path.exists(input_path + "/configure")
+    if is_has_configure:
+        logger.info(input_path + "/configure" + " is exists.")
         gcc_string += " -DHAVE_CONFIG_H"
 
+    # 导出目录扫描数据
+    import capture
+    logger.info("Dumping scaned data")
+    source_files = [x[0] for x in files_s]
+    capture.scan_data_dump(command_output_path + "/" + "project_scan.json",
+            source_files,
+            files_s_defs,
+            files_h,
+            sub_paths,
+            is_has_configure
+            )
+    logger.info("Dumping scaned data success")
+
+    commands = []
+    logger.info("Start building compile commands")
     with open(command_output_path + "/" + "my_compile.sh", "w+") as fout:
         for source_file_tuple, definition in zip(files_s, files_s_defs):
             source_file = source_file_tuple[0]
@@ -211,8 +247,26 @@ if __name__ == "__main__":
             output_path_str = output_path
             if not output_path_str:
                 output_path_str = source_file[:file_index]
+            else:
+                # 设置输出目录
+                output_path_str = output_path_str + "/fileCache"
+                if not os.path.exists(output_path_str):
+                    os.makedirs(output_path_str)
             output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
             makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
             fout.write(makestring + "\n")
-    logger.info("complete")
+            commands.append(makestring)
+
+    logger.info("Dumping compiler commands complete")
+
+    logger.info("Start dumping commands")
+    # 导出生成的编译命令
+    capture.commands_dump(command_output_path + "/compile_commands.json",
+            source_files,
+            commands,
+            [command_output_path for i in source_files]
+            )
+    logger.info("Dumping commands success")
+
+    logger.info("Complete")
 
