@@ -15,6 +15,7 @@ import multiprocessing
 
 
 # 使用copy_reg将MethodType注册为可序列化的方法，从而保证类方法可以被pickle序列化
+"""
 import copy_reg
 import types
 
@@ -25,6 +26,7 @@ def _pickle_method(m):
         return getattr, (m.im_self, m.im_func.func_name)
 
 copy_reg.pickle(types.MethodType, _pickle_method)
+"""
 
 # 默认配置
 CPU_CORE_COUNT = multiprocessing.cpu_count()
