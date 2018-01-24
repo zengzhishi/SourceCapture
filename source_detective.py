@@ -238,6 +238,7 @@ if __name__ == "__main__":
 
     commands = []
     logger.info("Start building compile commands")
+
     with open(command_output_path + "/" + "my_compile.sh", "w+") as fout:
         for source_file_tuple, definition in zip(files_s, files_s_defs):
             source_file = source_file_tuple[0]
