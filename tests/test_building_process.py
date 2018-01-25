@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*_
 """
 
-    @FileName: test.py
+    @FileName: test_building_process.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-24 15:29:04
-    @LastModif: 2018-01-24 17:36:10
+    @LastModif: 2018-01-25 15:01:44
     @Note:
 """
-
-import building_process
+import pools.building_process as building_process
+#import building_process
 import multiprocessing
 import time
 
