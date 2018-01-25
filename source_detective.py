@@ -9,6 +9,99 @@ import Queue
 import logging
 import logging.config
 import parse_logger
+import time
+
+
+SYSTEM_PATH_SEPERATE = "/"
+
+# 并发构建编译命令
+import building_process
+
+class CommandBuilder(building_process.ProcessBuilder):
+    def mission(self, queue, result_dict, locks=[]):
+        lock = locks[0]
+        lock.acquire()
+        while not queue.empty():
+            job_tuple = queue.get()
+            lock.release()
+            command_string = self.compile_command
+            file_path = job_tuple[0]
+            definition = job_tuple[1]
+            flags = job_tuple[2]
+
+            filename = file_path.split(SYSTEM_PATH_SEPERATE)[-1]
+            # 文件名hash处理
+            transfer_name = capture.source_path_MD5Calc(file_path)
+            file_out_folder = ""
+            if self.output_path:
+                file_out_folder = self.output_path + "/fileCache"
+                if not os.path.exists(file_out_folder):
+                    os.makedirs(file_out_folder)
+            else:
+                file_index = -(len(file_name) + 1)
+                file_out_folder = file_path[:file_index]
+            file_out_path = file_out_folder + SYSTEM_PATH_SEPERATE + transfer_name + ".o"
+
+            command_string += definition
+            command_string += " -c " + file_path
+            command_string += " -o " + file_out_path
+            command_string += self.include_path
+
+            for flag in flags:
+                command_string += " " + flag
+
+            # TODO 保存到数据库中 key: transfer_name
+            # value: [filepath, definition, flags]
+
+            # 输出结果
+            result_dict[transfer_name] = (file_path, command_string, self.output_path)
+            lock.acquire()
+        lock.release()
+        return
+
+    def distribute_jobs(self, compile_command, output_path, \
+            files_s, defs, flags, sub_paths):
+        self.compile_command = compile_command
+        self.output_path = output_path
+        self.include_path = ""
+
+        for path in sub_paths:
+            self.include_path += " " + "-I" + path
+
+        for job_tuple in zip(files_s, defs, flags):
+            self.queue.put(job_tuple)
+
+    def run(self, worker_num=building_process.CPU_CORE_COUNT):
+        """返回结果为dict
+
+        Returns:
+            result_dict:    {hash处理后的文件名: (源文件, 编译命令, 命令执行路径),...}
+
+        """
+        result_dict = self._manager.dict()
+        self.log_mission("info", "Multiprocess mission Start...")
+        start_time = time.clock()
+
+        process_list = []
+
+        # 添加任务完成度记录进程
+        p = building_process.multiprocessing.Process(target=self.log_total_missions, args=(self.queue,))
+        process_list.append(p)
+        p.start()
+
+        for i in range(worker_num):
+            p = building_process.multiprocessing.Process(target=self.mission, args=(self.queue, result_dict, self.lock,))
+            process_list.append(p)
+            p.start()
+
+        for p in process_list:
+            p.join()
+
+        end_time = time.clock()
+        self.log_mission("info", "All Process Time: %f" % (end_time - start_time))
+        self.log_mission("info", "Multiprocess mission complete...")
+
+        return result_dict
 
 #logging.config.fileConfig("logging.conf")
 #logger = logging.getLogger("compileLog")
@@ -177,7 +270,7 @@ if __name__ == "__main__":
     else:
         sys.stderr.write("""Please input project root path to compiler.
     Usage:
-        ./program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path]
+        python program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path]
 """)
         sys.exit()
 
@@ -209,10 +302,12 @@ if __name__ == "__main__":
     sub_paths, files_s, files_h, files_s_defs = get_present_path2(input_path, prefers)
     logger.info("End of Scaning project folders...")
 
+    """
     # add Include path
     gcc_include_string = ""
     for path in sub_paths:
         gcc_include_string = gcc_include_string + " " + "-I" + path
+    """
 
     # TODO 对输出命令进行构建，可以抽取成一个单独的模块
     gcc_string = "gcc"
@@ -239,6 +334,8 @@ if __name__ == "__main__":
     commands = []
     logger.info("Start building compile commands")
 
+    # 单进程处理
+    """
     with open(command_output_path + "/" + "my_compile.sh", "w+") as fout:
         for source_file_tuple, definition in zip(files_s, files_s_defs):
             source_file = source_file_tuple[0]
@@ -258,16 +355,26 @@ if __name__ == "__main__":
             makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
             fout.write(makestring + "\n")
             commands.append(makestring)
+    """
+
+    command_builder = CommandBuilder(logger)
+    command_builder.distribute_jobs(gcc_string, command_output_path, \
+            source_files, files_s_defs, [[] for i in source_files], sub_paths)
+    result_dict = command_builder.run()
 
     logger.info("Dumping compiler commands complete")
 
     logger.info("Start dumping commands")
     # 导出生成的编译命令
+    capture.dict_command_dump(command_output_path + "/compile_commands.json",
+            result_dict)
+    """
     capture.commands_dump(command_output_path + "/compile_commands.json",
             source_files,
             commands,
             [command_output_path for i in source_files]
             )
+    """
     logger.info("Dumping commands success")
 
     logger.info("Complete")

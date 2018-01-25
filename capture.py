@@ -5,7 +5,7 @@
     @FileName: capture.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-23 11:27:56
-    @LastModif: 2018-01-23 19:49:44
+    @LastModif: 2018-01-25 11:51:11
     @Note:
 """
 
@@ -16,7 +16,7 @@ import hashlib
 
 def bigFileMD5Calc(file):
     """逐步更新计算文件MD5"""
-    m = md5()
+    m = hashlib.md5()
     buffer = 8192   # why is 8192 | 8192 is fast than 2048
 
     m.update(file)  # 加入文件的路径，使得不同目录即使文件内容相同，也能生成不同的MD5值
@@ -32,11 +32,18 @@ def bigFileMD5Calc(file):
 
 def fileMD5Calc(file):
     """直接读取计算文件MD5"""
-    m = md5()
+    m = hashlib.md5()
     m.update(file)
     with open(file, 'rb') as f:
         m.update(f.read())
 
+    return m.hexdigest()
+
+
+def source_path_MD5Calc(file):
+    """直接计算文件路径的MD5，不考虑文件内容，只要能对文件就行重新命令即可"""
+    m = hashlib.md5()
+    m.update(file)
     return m.hexdigest()
 
 
@@ -79,6 +86,19 @@ def commands_dump(output_path, source_files, commands, working_paths):
         json.dump(json_body, fout, indent=4)
     return
 
+def dict_command_dump(output_path, result_dict):
+    json_body = []
+    while len(result_dict):
+        key, output_tuple = result_dict.popitem()
+        json_data = {
+                "directory": output_tuple[2],
+                "command": output_tuple[1],
+                "file": output_tuple[0]
+                }
+        json_body.append(json_data)
+    with open(output_path, 'w') as fout:
+        json.dump(json_body, fout, indent=4)
+    return
 
 def scan_data_dump(output_path, source_files, macros, include_files, \
         include_paths, is_has_config=False):
@@ -110,6 +130,9 @@ def scan_data_dump(output_path, source_files, macros, include_files, \
     return
 
 class CaptureBuilder(object):
+    """主要的编译构建脚本生成类"""
+    def __init__():
+        None
     None
 
 def main():

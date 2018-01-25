@@ -5,7 +5,7 @@
     @FileName: building_process.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-22 15:38:16
-    @LastModif: 2018-01-24 17:48:22
+    @LastModif: 2018-01-25 11:02:11
     @Note: 进程池管理类
 """
 
@@ -62,7 +62,6 @@ class ProcessBuilder(object):
         """任务分配，可以被重写，默认采用单条数据作为一个任务"""
         for job in jobs:
             self.queue.put(job)
-        self.total_count = self.queue.qsize()
 
     def log_mission(self, level, massage):
         """多进程读写日志"""
@@ -72,14 +71,18 @@ class ProcessBuilder(object):
 
     def log_total_missions(self, queue, check_interval=0.01):
         """定时报告整体任务完成度，可以被重写，默认检查总任务数完成百分比"""
-        left_count = queue.qsize()
+        total_count = queue.qsize()
+        last_time = total_count
+        left_count = total_count
+        self.log_mission("info", "Mission process: %f %%" % 0.0)
         while left_count != 0:
-            self.log_mission("info", "Mission process: %f %%" % \
-                    ((self.total_count - left_count) / float(self.total_count) * 100.0))
+            if left_count != total_count:
+                self.log_mission("info", "Mission process: %f %%" % \
+                    ((total_count - left_count) / float(total_count) * 100.0))
             time.sleep(check_interval)
             left_count = queue.qsize()
         self.log_mission("info", "Mission process: %f %%" % \
-                ((self.total_count - left_count) / float(self.total_count) * 100.0))
+                ((total_count - left_count) / float(total_count) * 100.0))
         return
 
     def run(self, worker_num=CPU_CORE_COUNT):
