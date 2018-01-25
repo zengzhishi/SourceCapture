@@ -5,7 +5,7 @@
     @FileName: capture.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-23 11:27:56
-    @LastModif: 2018-01-25 11:51:11
+    @LastModif: 2018-01-25 16:00:48
     @Note:
 """
 
@@ -57,9 +57,10 @@ def file_transfer(filename, path):
     return fileMD5Calc(file)
 
 
-def file_info_save(redis_conf, filename, source_path, transfer_name, flags):
+def file_info_save(redis_instance, filename, source_path, transfer_name, definition, flags):
     """保存源文件信息到redis中"""
-    # TODO 构建一份 redis conf 文件
+    seria_data = (source_path, filename, definition, flags)
+    redis_instance.set(transfer_name, json.dumps(seria_data))
     return
 
 def get_file_info(redis_conf, transfer_name):

@@ -11,6 +11,9 @@ import logging.config
 import parse_logger
 import time
 
+sys.path.append("./utils")
+import redis
+import capture
 
 SYSTEM_PATH_SEPERATE = "/"
 
@@ -18,7 +21,7 @@ SYSTEM_PATH_SEPERATE = "/"
 import building_process
 
 class CommandBuilder(building_process.ProcessBuilder):
-    def mission(self, queue, result_dict, locks=[]):
+    def mission(self, queue, result_dict, redis_instance, locks=[]):
         lock = locks[0]
         lock.acquire()
         while not queue.empty():
@@ -33,14 +36,18 @@ class CommandBuilder(building_process.ProcessBuilder):
             # 文件名hash处理
             transfer_name = capture.source_path_MD5Calc(file_path)
             file_out_folder = ""
+            file_index = -(len(filename) + 1)
+            old_folder = file_path[:file_index]
             if self.output_path:
                 file_out_folder = self.output_path + "/fileCache"
                 if not os.path.exists(file_out_folder):
                     os.makedirs(file_out_folder)
             else:
-                file_index = -(len(file_name) + 1)
-                file_out_folder = file_path[:file_index]
+                file_out_folder = old_folder
             file_out_path = file_out_folder + SYSTEM_PATH_SEPERATE + transfer_name + ".o"
+
+            capture.file_info_save(redis_instance, filename, old_folder, \
+                    transfer_name, definition, flags)
 
             command_string += definition
             command_string += " -c " + file_path
@@ -89,8 +96,10 @@ class CommandBuilder(building_process.ProcessBuilder):
         process_list.append(p)
         p.start()
 
+        pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
         for i in range(worker_num):
-            p = building_process.multiprocessing.Process(target=self.mission, args=(self.queue, result_dict, self.lock,))
+            redis_instance = redis.Redis(connection_pool=pool)
+            p = building_process.multiprocessing.Process(target=self.mission, args=(self.queue, result_dict, redis_instance, self.lock))
             process_list.append(p)
             p.start()
 
@@ -319,7 +328,6 @@ if __name__ == "__main__":
         gcc_string += " -DHAVE_CONFIG_H"
 
     # 导出目录扫描数据
-    import capture
     logger.info("Dumping scaned data")
     source_files = [x[0] for x in files_s]
     capture.scan_data_dump(command_output_path + "/" + "project_scan.json",
