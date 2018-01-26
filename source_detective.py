@@ -11,8 +11,12 @@ import logging.config
 import parse_logger
 import time
 
-sys.path.append("./utils")
-import redis
+try:
+    import redis
+except ImportError:
+    sys.path.append("./utils")
+    import redis
+
 import capture
 
 SYSTEM_PATH_SEPERATE = "/"
@@ -21,16 +25,22 @@ SYSTEM_PATH_SEPERATE = "/"
 import building_process
 
 class CommandBuilder(building_process.ProcessBuilder):
-    def mission(self, queue, result_dict, redis_instance, locks=[]):
+    def mission(self, queue, logger_pipe, result_dict, redis_instance, locks=[]):
         lock = locks[0]
+        pid = os.getpid()
+        logger_pipe.send(["info", "Process pid:%d start." % pid])
         lock.acquire()
         while not queue.empty():
             job_tuple = queue.get()
             lock.release()
             command_string = self.compile_command
-            file_path = job_tuple[0]
-            definition = job_tuple[1]
-            flags = job_tuple[2]
+            try:
+                file_path = job_tuple[0]
+                definition = job_tuple[1]
+                flags = job_tuple[2]
+            except IndexError:
+                logger_pipe.send(["debug", "Process pid:%d job fail: [%s]" % str(job_tuple)])
+                continue
 
             filename = file_path.split(SYSTEM_PATH_SEPERATE)[-1]
             # 文件名hash处理
@@ -38,16 +48,30 @@ class CommandBuilder(building_process.ProcessBuilder):
             file_out_folder = ""
             file_index = -(len(filename) + 1)
             old_folder = file_path[:file_index]
-            if self.output_path:
-                file_out_folder = self.output_path + "/fileCache"
-                if not os.path.exists(file_out_folder):
-                    os.makedirs(file_out_folder)
-            else:
-                file_out_folder = old_folder
+
+            try:
+                if self.output_path:
+                    file_out_folder = self.output_path + "/fileCache"
+                    if not os.path.exists(file_out_folder):
+                            os.makedirs(file_out_folder)
+
+                else:
+                    file_out_folder = old_folder
+            except OSError:
+                # 目录创建失败直接退出进程
+                logger_pipe.send(["critical", "creating directory fail: [%s]" % \
+                        file_out_folder])
+                return
             file_out_path = file_out_folder + SYSTEM_PATH_SEPERATE + transfer_name + ".o"
 
-            capture.file_info_save(redis_instance, filename, old_folder, \
+            try:
+                capture.file_info_save(redis_instance, filename, old_folder, \
                     transfer_name, definition, flags)
+            except redis.RedisError:
+                # 信息保存失败，继续执行
+                logger_pipe.send(["warning", \
+                        "Source info for [%s] saving to redis fail." % transfer_name])
+
 
             command_string += definition
             command_string += " -c " + file_path
@@ -57,13 +81,12 @@ class CommandBuilder(building_process.ProcessBuilder):
             for flag in flags:
                 command_string += " " + flag
 
-            # TODO 保存到数据库中 key: transfer_name
-            # value: [filepath, definition, flags]
-
             # 输出结果
             result_dict[transfer_name] = (file_path, command_string, self.output_path)
             lock.acquire()
         lock.release()
+
+        logger_pipe.send(["info", "Process pid:%d Complete." % pid])
         return
 
     def distribute_jobs(self, compile_command, output_path, \
@@ -76,39 +99,62 @@ class CommandBuilder(building_process.ProcessBuilder):
             self.include_path += " " + "-I" + path
 
         for job_tuple in zip(files_s, defs, flags):
-            self.queue.put(job_tuple)
+            self._queue.put(job_tuple)
 
-    def run(self, worker_num=building_process.CPU_CORE_COUNT):
+    def run(self, process_log_path=None, worker_num=building_process.CPU_CORE_COUNT):
         """返回结果为dict
 
         Returns:
             result_dict:    {hash处理后的文件名: (源文件, 编译命令, 命令执行路径),...}
 
         """
+
         result_dict = self._manager.dict()
-        self.log_mission("info", "Multiprocess mission Start...")
+        self._logger.info("Multiprocess mission Start...")
         start_time = time.clock()
 
-        process_list = []
+        # 设置进程日志
+        if not process_log_path:
+            filepath = self._logger.handlers[0].baseFilename
+            filename = filepath.split("/")[-1]
+            process_log_path = filepath[:-(len(filename) + 1)]
+        process_logger = self._logger_config(process_log_path)
+
+
+        # 设置日志信息管道
+        self.__logger_pipe_r, self.__logger_pipe_w = building_process.multiprocessing.Pipe(duplex=False)
 
         # 添加任务完成度记录进程
-        p = building_process.multiprocessing.Process(target=self.log_total_missions, args=(self.queue,))
+        process_list = []
+        p = building_process.multiprocessing.Process(target=self.log_total_missions, args=(self._queue,))
         process_list.append(p)
         p.start()
 
         pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
         for i in range(worker_num):
             redis_instance = redis.Redis(connection_pool=pool)
-            p = building_process.multiprocessing.Process(target=self.mission, args=(self.queue, result_dict, redis_instance, self.lock))
+            p = building_process.multiprocessing.Process(target=self.mission, args=(self._queue, \
+                    self.__logger_pipe_w, result_dict, redis_instance, self.lock))
             process_list.append(p)
             p.start()
+
+        # 添加进程任务打印进程  TODO: 考虑是否可合并
+        p_logger = building_process.multiprocessing.Process(target=self.mission_logger, \
+                args=(self.__logger_pipe_r, process_logger,))
+        p_logger.start()
+
 
         for p in process_list:
             p.join()
 
+        # 在其他进程结束之后对日志模块发出结束信号
+        self.__logger_pipe_w.send(["END"])
+        p_logger.join()
+
         end_time = time.clock()
-        self.log_mission("info", "All Process Time: %f" % (end_time - start_time))
-        self.log_mission("info", "Multiprocess mission complete...")
+
+        self._logger.info("All Process Time: %f" % (end_time - start_time))
+        self._logger.info("Multiprocess mission complete...")
 
         return result_dict
 
