@@ -5,9 +5,8 @@
     @FileName: building_process.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-22 15:38:16
-    @LastModif: 2018-01-26 17:02:29
+    @LastModif: 2018-01-26 18:00:10
     @Note: 进程池管理类
-    TODO: 使用一个单独的进程来写日志
 """
 
 import os

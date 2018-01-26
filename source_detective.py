@@ -138,7 +138,6 @@ class CommandBuilder(building_process.ProcessBuilder):
             process_list.append(p)
             p.start()
 
-        # 添加进程任务打印进程  TODO: 考虑是否可合并
         p_logger = building_process.multiprocessing.Process(target=self.mission_logger, \
                 args=(self.__logger_pipe_r, process_logger,))
         p_logger.start()
@@ -309,6 +308,14 @@ def get_dir(path):
     return paths
 
 
+############################################################################################
+#  TODO 这里一大串都不应该放在这里，需要提取到capture中比较合理
+#  1. 关于日志的配置，结果的导出，配置的输入等 抽取到capture的main
+#  2. 关键参数的识别，比如-DHAVE_CONFIG_H等，抽取为capture的一个function
+#  3. CommandBuilder可以再创建一个文件，building_process还是保持为一个通用的模块
+#  4. source_detective这里需要增加编译文件类型涵盖的返回，从而capture能判断需要使用什么编译
+############################################################################################
+
 if __name__ == "__main__":
     output_path = ""
     if len(sys.argv) == 2:
@@ -364,7 +371,6 @@ if __name__ == "__main__":
         gcc_include_string = gcc_include_string + " " + "-I" + path
     """
 
-    # TODO 对输出命令进行构建，可以抽取成一个单独的模块
     gcc_string = "gcc"
 
     logger.info("checking configure file...")
