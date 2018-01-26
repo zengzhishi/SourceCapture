@@ -5,14 +5,30 @@
     @FileName: capture.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-23 11:27:56
-    @LastModif: 2018-01-25 16:00:48
+    @LastModif: 2018-01-26 19:02:13
     @Note:
 """
 
 import os
 import sys
-import json
+import logging
+import logging.config
+
 import hashlib
+import json
+
+# 需要改为绝对路径
+import parse_logger
+try:
+    import redis
+except ImportError:
+    sys.path.append("./utils")
+    import redis
+
+
+# 基本配置项
+CONFIG_FILE = "./capture.cfg"
+
 
 def bigFileMD5Calc(file):
     """逐步更新计算文件MD5"""
@@ -63,9 +79,18 @@ def file_info_save(redis_instance, filename, source_path, transfer_name, definit
     redis_instance.set(transfer_name, json.dumps(seria_data))
     return
 
-def get_file_info(redis_conf, transfer_name):
-    """利用transfer_name获取源文件编译信息"""
-    return
+def get_file_info(redis_instance, transfer_name):
+    """利用transfer_name获取源文件编译信息
+    Returns:
+        source_path:    源文件路径
+        filename:       文件名
+        definition:     宏定义
+        flags:          编译参数
+    """
+    raw_data = redis_instance.get(transfer_name)
+    seria_data = json.loads(raw_data)
+    return seria_data
+
 
 def commands_dump(output_path, source_files, commands, working_paths):
     """导出生成的编译命令
@@ -87,7 +112,9 @@ def commands_dump(output_path, source_files, commands, working_paths):
         json.dump(json_body, fout, indent=4)
     return
 
+
 def dict_command_dump(output_path, result_dict):
+    """利用最终返回的结果字典，导出生成的编译命令"""
     json_body = []
     while len(result_dict):
         key, output_tuple = result_dict.popitem()
@@ -100,6 +127,7 @@ def dict_command_dump(output_path, result_dict):
     with open(output_path, 'w') as fout:
         json.dump(json_body, fout, indent=4)
     return
+
 
 def scan_data_dump(output_path, source_files, macros, include_files, \
         include_paths, is_has_config=False):
@@ -132,9 +160,46 @@ def scan_data_dump(output_path, source_files, macros, include_files, \
 
 class CaptureBuilder(object):
     """主要的编译构建脚本生成类"""
-    def __init__():
-        None
-    None
+    def __init__(self, compiler_type="gcc", compiler_path=None):
+        self.__prefers = []
+        self.compiler_type = compiler_type
+        if compiler_path:
+            self.compiler_path = compiler_path
+        else:
+            self.compiler_path = get_system_compiler_path(compiler_type)
+
+    def __logger_config(self):
+        pass
+
+    def add_prefer_folder(self, folder):
+        self.__prefers.append(folder)
+        pass
+
+    @prefers.setter
+    def prefers(self, prefers):
+        import types
+        if type(prefers) == types.ListType:
+            self.__prefers = prefers
+        else:
+            raise TypeError("object 'prefers' is not ListType")
+
+    @property
+    def prefer_folders(self):
+        return self.__prefers
+
+    def command_prebuild(self, ):
+        pass
+
+def get_system_compiler_path(compiler_type):
+    """获取系统自带的编译器路径"""
+    pass
+
+def parse_prefer_str(prefer_str, input_path):
+    if prefer_str == "all":
+        prefers = source_detective.get_dir(input_path)
+    else:
+        prefers = prefer_str.strip(' \n\t').split(",")
+    return prefers
 
 def main():
     """主要逻辑"""
