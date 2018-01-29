@@ -1,6 +1,18 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
+#################################################################################################
+#  TODO: 
+#  1. 改变目录搜索获取参数的方式，针对与可以使用cmake的目录，可以采用更加方便的方式，
+#  通过获取每个含有CMakeList.txt目录下的flags.make，可以获得编译参数，头文件引用路径，和宏定义
+#  需要做的工作只是获取这些，同时返回有哪些头文件和源文件即可，遍历上不需要将所有自路径都添加进来
+#  2. 针对使用automake工具的项目，还需要研究一下
+#  3. 针对直接使用Makefile的，可以通过添加一个伪目标，利用@echo来输出需要使用到的FLAGS参数，
+#  但是由于命名和写法的不一致，可能需要做整个依赖关系的解析，得到最终需要使用到的flag参数对应的
+#  变量
+#
+#################################################################################################
+
 import re
 import os
 import sys
@@ -20,6 +32,7 @@ except ImportError:
 import capture
 
 SYSTEM_PATH_SEPERATE = "/"
+COMPILE_COMMAND = "gcc"
 
 # 并发构建编译命令
 import building_process
@@ -371,13 +384,13 @@ if __name__ == "__main__":
         gcc_include_string = gcc_include_string + " " + "-I" + path
     """
 
-    gcc_string = "gcc"
+    compile_string = COMPILE_COMMAND
 
     logger.info("checking configure file...")
     is_has_configure = os.path.exists(input_path + "/configure")
     if is_has_configure:
         logger.info(input_path + "/configure" + " is exists.")
-        gcc_string += " -DHAVE_CONFIG_H"
+        compile_string += " -DHAVE_CONFIG_H"
 
     # 导出目录扫描数据
     logger.info("Dumping scaned data")
@@ -412,13 +425,13 @@ if __name__ == "__main__":
                 if not os.path.exists(output_path_str):
                     os.makedirs(output_path_str)
             output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
-            makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
+            makestring = compile_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
             fout.write(makestring + "\n")
             commands.append(makestring)
     """
 
     command_builder = CommandBuilder(logger)
-    command_builder.distribute_jobs(gcc_string, command_output_path, \
+    command_builder.distribute_jobs(compile_string, command_output_path, \
             source_files, files_s_defs, [[] for i in source_files], sub_paths)
     result_dict = command_builder.run()
 
