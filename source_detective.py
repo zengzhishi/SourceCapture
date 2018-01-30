@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 #################################################################################################
-#  TODO: 
+#  TODO:
 #  1. 改变目录搜索获取参数的方式，针对与可以使用cmake的目录，可以采用更加方便的方式，
 #  通过获取每个含有CMakeList.txt目录下的flags.make，可以获得编译参数，头文件引用路径，和宏定义
 #  需要做的工作只是获取这些，同时返回有哪些头文件和源文件即可，遍历上不需要将所有自路径都添加进来
@@ -20,7 +20,7 @@ import subprocess
 import Queue
 import logging
 import logging.config
-import parse_logger
+import conf.parse_logger as parse_logger
 import time
 
 try:
@@ -246,8 +246,118 @@ def selective_walk(root_path, prefers):
         yield (present_path, files, def_str)
 
 
+def check_cmake(path):
+    """
+    检查是否有CMakeList.txt
+    :param path:
+    :return:        bool
+    """
+    #check CMakeList.txt is exist
+    if os.path.exists(path + "/CMakeList.txt"):
+        return True
+    return False
+
+
+def get_cmake_info(path, cmake_build_path):
+    # TODO: cmake信息解析
+    # flags, defines, include_paths
+    # 1. 首先找到CMakeFiles/XXXX.dir目录（可能有多个）
+    # 2. 解析XXXX.dir目录下的DependInfo.cmake文件，并将此目录下的源文件编译归类
+    # 3. 讲INFO中获取到的file_s构造一个set用于返回
+    # 4. 解析XXXX.dir目录下的flags.make文件，得到flags，defines，includes
+    # 5. 构造成一个info_list返回
+
+    build_path = cmake_build_path + "/CMakeFiles"
+    filelists = os.listdir(build_path)
+    for file_name in filelists:
+        file_path = build_path + "/" + file_name
+        "CMAKE_DEPENDS_LANGUAGES"
+
+
+
+    file_s_set = set()
+    return [(file_s_set, [], [], []), (file_s_set, [], [], []),]
+
+
+def cmake_project_walk(root_path, prefers, cmake_build_path):
+    """
+    寻找根路径下project组成, 返回应该以CMake的一个set为准
+    :param root_path:
+    :param prefers:
+    :return:
+    """
+    to_walks = Queue.Queue()
+
+    flags, definitions, include_paths = get_cmake_info(root_path)
+
+    to_walks.put((root_path, flags, definitions, include_paths, root_path))
+    present_path = ""
+
+    prefer_paths = set()
+    for name in prefers:
+        file_path = root_path + "/" + name
+        prefer_paths.add(file_path)
+
+    level = 0
+    while not to_walks.empty():
+        (present_path, [flags, definitions, include_paths], exec_path) \
+            = to_walks.get()
+
+        if check_cmake(present_path):
+            flags, definitions, include_paths = get_cmake_info(present_path)
+            exec_path = present_path
+
+        filelists = os.listdir(present_path)
+        files = []
+        for file_name in filelists:
+            file_path = present_path + "/" + file_name
+            if os.path.isdir(file_path):
+                if not level:
+                    if file_path in prefer_paths:
+                        to_walks.put((file_path, flags, definitions, include_paths, exec_path))
+                else:
+                    if file_name[0] != '.':                         # 排除了隐藏文件
+                        to_walks.put((file_path, flags, definitions, include_paths, exec_path))
+            else:
+                files.append(file_name)
+        level = 1
+        yield [(present_path, files, flags, definitions, include_paths, exec_path), ]
+
+
+def get_present_path_cmake(root_path, prefers, is_outer_project=False, cmake_build_path=None):
+    """
+    针对与CMake构建的项目，需要特殊处理一点，不能直接遍历.
+
+    :param root_path:               项目根路径
+    :param prefers:                 关注目录
+    :param is_outer_project:        是否为外部构建
+    :param cmake_build_path:        指定cmake build路径
+    :return:
+        sub_paths:                  子目录（用于添加include路径）
+        source_files:               源文件
+        include_files:              头文件
+        source_defs:                源文件编译所需要的宏定义（与源文件一一对应）
+    """
+    if len(prefers) == 0:
+        prefers = ["src", "include", "lib", "modules"]
+    source_file_suffix = set("cpp, c, cc")
+    include_file_suffix = set("h, hpp")
+
+    # iter 内使用，每次遍历返回回来的exec_path可能是相同的，所以需要extend文件
+    exec_path = ""
+    files_s = []
+    files_h = []
+    defs = []                   # defs应该与执行目录对应
+
+    # 外部保存使用
+    relative_paths = {exec_path: (files_s, files_h, defs)}
+
+
+
+
 def get_present_path2(root_path, prefers):
     """
+    遍历项目的目录结构，获取project_info
     Args:
         root_path:          项目根目录
         prefers:            关注路径（全选时，可能会出现example等涉及到未安装对应库的文件失败，
@@ -314,6 +424,7 @@ def get_present_path(root_path):
 
 
 def get_dir(path):
+    """获取指定路径下的所有目录"""
     paths = []
     for one in os.listdir(path):
         if os.path.isdir(path + "/" + one):
@@ -354,13 +465,12 @@ if __name__ == "__main__":
 
 
     # 设置编译脚本输出目录和日志输出
-    logger_builder = parse_logger.logger_analysis("capture.cfg")
+    logger = parse_logger.getLogger("conf/logging.conf", \
+            new_output=output_path + "/capture.log")
     command_output_path = input_path
+
     if output_path:
         command_output_path = output_path
-        logger = logger_builder.get_Logger("simpleExample", output_path + "/capture.log")
-    else:
-        logger = logger_builder.get_Logger("simpleExample", "capture.log")
 
     logger.info("Loading config complete")
 
