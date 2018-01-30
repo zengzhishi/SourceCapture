@@ -30,6 +30,7 @@ except ImportError:
     import redis
 
 import capture
+import utils.parse_cmake as parse_cmake
 
 SYSTEM_PATH_SEPERATE = "/"
 COMPILE_COMMAND = "gcc"
@@ -258,25 +259,42 @@ def check_cmake(path):
     return False
 
 
+def check_cmake_exec_dest_dirname(file_name):
+    """
+    防止异常目录干扰
+    :param file_name:
+    :return:
+    """
+    if file_name[-4:] == ".dir":
+        return True
+    return False
+
+
 def get_cmake_info(path, cmake_build_path):
-    # TODO: cmake信息解析
-    # flags, defines, include_paths
-    # 1. 首先找到CMakeFiles/XXXX.dir目录（可能有多个）
-    # 2. 解析XXXX.dir目录下的DependInfo.cmake文件，并将此目录下的源文件编译归类
-    # 3. 讲INFO中获取到的file_s构造一个set用于返回
-    # 4. 解析XXXX.dir目录下的flags.make文件，得到flags，defines，includes
-    # 5. 构造成一个info_list返回
-
+    """
+    搜索指定目录下CMakeFiles中的生成目录，并解析出目录下的源文件所需要的编译参数
+    :param path:                        源文件的目录（原定有用后来发现暂时还没有使用的必要）
+    :param cmake_build_path:
+    :return:
+    """
     build_path = cmake_build_path + "/CMakeFiles"
-    filelists = os.listdir(build_path)
-    for file_name in filelists:
+    info_list = []
+
+    for file_name in os.listdir(build_path):
         file_path = build_path + "/" + file_name
-        "CMAKE_DEPENDS_LANGUAGES"
+        if os.path.isdir(file_path) and check_cmake_exec_dest_dirname(file_name):
+            # 目标目录
+            flags_file = file_path + "/flags.make"
+            depend_file = file_path + "/DependInfo.make"
+            if os.path.exists(flags_file) and os.path.exists(depend_file):
+                depend_s_files, definitions, includes = parse_cmake.parse_dependInfo(flags_file)
+                flags = parse_cmake.parse_flags(depend_file)
+                file_s_set = set(depend_s_files)
+                info_list.append((file_s_set, flags, definitions, includes))
 
-
-
-    file_s_set = set()
-    return [(file_s_set, [], [], []), (file_s_set, [], [], []),]
+    if len(info_list) == 0:
+        info_list.append(set(), [], [], [])
+    return info_list
 
 
 def cmake_project_walk(root_path, prefers, cmake_build_path):
@@ -288,9 +306,13 @@ def cmake_project_walk(root_path, prefers, cmake_build_path):
     """
     to_walks = Queue.Queue()
 
-    flags, definitions, include_paths = get_cmake_info(root_path)
+    #[[file_s_set, flags, definitions, includes_ paths],]
+    cmake_infos_list = get_cmake_info(root_path)
 
-    to_walks.put((root_path, flags, definitions, include_paths, root_path))
+    #[[files, flags, definitions, includes, paths], ]
+    transfer_infos = []
+
+    to_walks.put((root_path, , root_path))
     present_path = ""
 
     prefer_paths = set()
@@ -304,12 +326,11 @@ def cmake_project_walk(root_path, prefers, cmake_build_path):
             = to_walks.get()
 
         if check_cmake(present_path):
-            flags, definitions, include_paths = get_cmake_info(present_path)
+            file_s_set, flags, definitions, include_paths = get_cmake_info(present_path)
             exec_path = present_path
 
-        filelists = os.listdir(present_path)
         files = []
-        for file_name in filelists:
+        for file_name in os.listdir(present_path):
             file_path = present_path + "/" + file_name
             if os.path.isdir(file_path):
                 if not level:

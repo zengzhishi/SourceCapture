@@ -71,14 +71,36 @@ def set_analysis(fin):
     return config
 
 
-def parse_dependInfo(file):
+def parse_flags(flags_file):
+    flags_set = set("CXX_FLAGS", "C_FLAGS")
+    fin = open(flags_file, "r")
+    data = ""
+    for line in fin:
+        line = line.strip(' \t\n')
+        # 跳过注释和空行
+        if len(line) == 0 or line[0] == '#':
+            continue
+        # 获取带comment的行， 并去除行尾的注释
+        setting_line_with_comment = re.match(r".+#\S*", line)
+        if setting_line_with_comment:
+            line = re.split("\s+\#", line)[0]
+
+        lst = re.split(r"\s+=\s+", line)
+        if lst[0] in flags_set:
+            data = lst[1]
+            break
+    flags = re.split("\s+(?=-)", data)
+    return flags
+
+
+def parse_cmakeInfo(depen_file):
     """
     解析DependInfo.cmake文件
     TODO: 这里返回的include路径是相对路径，因此，我的代码需要改成跳转到指定目录下执行
     :param file:    DependInfo.cmake的文件路径
     :return: files_s, definitions, includes
     """
-    fin = open(file, 'r')
+    fin = open(depen_file, 'r')
     config_dict = set_analysis(fin)
 
     compiler_type = ""
