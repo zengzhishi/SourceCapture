@@ -12,9 +12,11 @@
 import os
 import sys
 import time
+import re
 import conf.parse_logger as parse_logger
 import source_detective as source_detective
 import building_process
+import subprocess
 
 import hashlib
 import json
@@ -57,6 +59,12 @@ class CommandBuilder(building_process.ProcessBuilder):
                 flag_string += flag + " "
             definition_string = ""
             for definition in job_dict["definitions"]:
+                if definition.find(r'=\"') != -1:
+                    lst = re.split(r'\\"', definition)
+                    if len(lst) > 2:
+                        definition = lst[0] + "\"" + lst[1] + "\""
+                    else:
+                        self._logger.warning("definition %s analysis error" % definition)
                 definition_string += "-D" + definition + " "
             include_string = ""
             for include in job_dict["includes"]:
@@ -85,6 +93,49 @@ class CommandBuilder(building_process.ProcessBuilder):
         self._logger.info("Process pid:%d Complete." % pid)
         return
 
+
+class CommandExec(building_process.ProcessBuilder):
+    def mission(self, queue, result, locks=[]):
+
+        lock = locks[0]
+        pid = os.getpid()
+        self._logger.info("Process pid:%d start." % pid)
+        lock.acquire()
+        while not queue.empty():
+            job_dict = queue.get()
+            lock.release()
+
+            directory = job_dict["directory"]
+            file = job_dict["file"]
+            command = job_dict["command"]
+
+            cmd = "cd %s" % directory
+            p = subprocess.Popen(cmd, shell=True, \
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            retval = p.wait()
+
+            if retval != 0:
+                self._logger.warning("[%s] exec fail" % cmd)
+            else:
+                sys.stdout.write(cmd + "\n")
+
+            p = subprocess.Popen(command, shell=True, \
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            print command
+            retval = p.wait()
+            for line in p.stdout.readlines():
+                sys.stdout.write(line)
+
+            if retval == 0:
+                self._logger.info("compile: %s success" % file)
+            else:
+                self._logger.warning("compile: %s fail" % file)
+
+            lock.acquire()
+        lock.release()
+
+        self._logger.info("Process pid:%d Complete." % pid)
+        return
 
 def bigFileMD5Calc(file):
     """逐步更新计算文件MD5"""
@@ -311,6 +362,12 @@ class CaptureBuilder(object):
             json_ob = result_list.pop()
             output_list.append(json_ob)
         json.dump(output_list, fout, indent=4)
+        self.command_exec(output_list)
+
+    def command_exec(self, output_list):
+        command_exec = CommandExec(self._logger)
+        command_exec.distribute_jobs(output_list)
+        command_exec.run()
 
 
 def get_system_compiler_path(compiler_type):

@@ -416,8 +416,8 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         include_files
         files_count
     """
-    source_file_suffix = set("cpp, c, cc")
-    include_file_suffix = set("h, hpp")
+    source_file_suffix = set(["cpp", "c", "cc"])
+    include_file_suffix = set(["h", "hpp"])
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
@@ -430,14 +430,16 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
                 continue
             if len(info["flags"]) == 0 and len(info["definitions"]) == 0:
                 set_default(info)
+            lefts_s = []
             for file in info["source_files"]:
                 slice = file.split('.')
                 suffix = slice[-1]
                 if suffix not in source_file_suffix:
                     include_files.append(file)
-                    info["source_files"].remove(file)
                 else:
                     files_count += 1
+                    lefts_s.append(file)
+            info["source_files"] = lefts_s
             source_infos.append(info)
 
     return source_infos, include_files, files_count
@@ -445,7 +447,7 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
 
 def set_default(infos):
     """TODO: 需要设置一下基本的宏定义和编译flags"""
-    infos["flags"] = ["-fPCI", "-o2"]
+    infos["flags"] = ["-fPIC", "-o2"]
     infos["definitions"] = ["HAVE_CONFIG_H"]
     return
 
