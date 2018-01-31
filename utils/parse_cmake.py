@@ -51,7 +51,6 @@ def set_analysis(fin):
         # 获得到multiline config 的头
         start_result = re.match("set\((\S+)\s*", line)
         if start_result:
-            print "--start line"
             temp_key = start_result.group(1)
             config[temp_key] = []
             continue
@@ -72,7 +71,7 @@ def set_analysis(fin):
 
 
 def parse_flags(flags_file):
-    flags_set = set("CXX_FLAGS", "C_FLAGS")
+    flags_set = set(["CXX_FLAGS", "C_FLAGS"])
     fin = open(flags_file, "r")
     data = ""
     for line in fin:
@@ -104,10 +103,10 @@ def parse_cmakeInfo(depen_file):
     config_dict = set_analysis(fin)
 
     compiler_type = ""
-    if type(dict["CMAKE_DEPENDS_LANGUAGES"]) == types.ListType:
-        compiler_type = dict["CMAKE_DEPENDS_LANGUAGES"][0]
+    if type(config_dict["CMAKE_DEPENDS_LANGUAGES"]) == types.ListType:
+        compiler_type = config_dict["CMAKE_DEPENDS_LANGUAGES"][0]
     else:
-        compiler_type = dict["CMAKE_DEPENDS_LANGUAGES"]
+        compiler_type = config_dict["CMAKE_DEPENDS_LANGUAGES"]
 
     # 获取不同编译器的域名
     source_field = "CMAKE_DEPENDS_CHECK_C"
@@ -122,11 +121,11 @@ def parse_cmakeInfo(depen_file):
     else:
         raise Exception("compler type unsuport")
 
-    files = dict[source_field]
-    definitions = dict[definition_field]
-    includes = dict[include_field]
+    files = config_dict[source_field]
+    definitions = config_dict[definition_field]
+    includes = config_dict[include_field]
 
     files_s = filter(lambda file: file[-2:] != ".o", files)
 
-    return files, definitions, includes
+    return files_s, definitions, includes
 

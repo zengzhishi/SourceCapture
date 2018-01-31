@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 #################################################################################################
-#  TODO:
+#  TODO: 修改之后的思路
 #  1. 改变目录搜索获取参数的方式，针对与可以使用cmake的目录，可以采用更加方便的方式，
 #  通过获取每个含有CMakeList.txt目录下的flags.make，可以获得编译参数，头文件引用路径，和宏定义
 #  需要做的工作只是获取这些，同时返回有哪些头文件和源文件即可，遍历上不需要将所有自路径都添加进来
@@ -254,7 +254,7 @@ def check_cmake(path):
     :return:        bool
     """
     #check CMakeList.txt is exist
-    if os.path.exists(path + "/CMakeList.txt"):
+    if os.path.exists(path + "/CMakeLists.txt"):
         return True
     return False
 
@@ -270,88 +270,140 @@ def check_cmake_exec_dest_dirname(file_name):
     return False
 
 
-def get_cmake_info(path, cmake_build_path):
+def get_cmake_info(present_path, project_path, cmake_build_path=None):
     """
     搜索指定目录下CMakeFiles中的生成目录，并解析出目录下的源文件所需要的编译参数
-    :param path:                        源文件的目录（原定有用后来发现暂时还没有使用的必要）
-    :param cmake_build_path:
+
+    :param present_path:                            当前检索路径
+    :param project_path:                            项目根路径
+    :param cmake_build_path:                        cmake外部编译路径
     :return:
     """
-    build_path = cmake_build_path + "/CMakeFiles"
+    present_build_path = present_path
+    if cmake_build_path:
+        abs_project_path = os.path.abspath(project_path)
+        abs_present_path = os.path.abspath(present_path)
+        relative_path = abs_present_path[len(abs_project_path):]
+        present_build_path = cmake_build_path + relative_path
+    cmake_files_path = present_build_path + "/CMakeFiles"
     info_list = []
 
-    for file_name in os.listdir(build_path):
-        file_path = build_path + "/" + file_name
+    for file_name in os.listdir(cmake_files_path):
+        file_path = cmake_files_path + "/" + file_name
         if os.path.isdir(file_path) and check_cmake_exec_dest_dirname(file_name):
             # 目标目录
             flags_file = file_path + "/flags.make"
-            depend_file = file_path + "/DependInfo.make"
+            depend_file = file_path + "/DependInfo.cmake"
             if os.path.exists(flags_file) and os.path.exists(depend_file):
-                depend_s_files, definitions, includes = parse_cmake.parse_dependInfo(flags_file)
-                flags = parse_cmake.parse_flags(depend_file)
-                file_s_set = set(depend_s_files)
-                info_list.append((file_s_set, flags, definitions, includes))
+                depend_s_files, definitions, includes = parse_cmake.parse_cmakeInfo(depend_file)
+                flags = parse_cmake.parse_flags(flags_file)
+                info_list.append({
+                    "source_files": depend_s_files,
+                    "flags": flags,
+                    "definitions": definitions,
+                    "includes": includes
+                })
 
+    # 对于有定义CMakeLists.txt文件，但是没有配置编译选项的情况
     if len(info_list) == 0:
-        info_list.append(set(), [], [], [])
+        info_list.append({
+            "source_files": [],
+            "flags": [],
+            "definitions": [],
+            "includes": []
+        })
     return info_list
 
 
-def cmake_project_walk(root_path, prefers, cmake_build_path):
+def cmake_project_walk(root_path, prefers, cmake_build_path=None):
     """
     寻找根路径下project组成, 返回应该以CMake的一个set为准
     :param root_path:
     :param prefers:
-    :return:
+    :return:    [present_path, files_s_infos, files_h]
+        files_s_infos -> list
+        files_s_infos = [[files_s, flags, defs, includes, exec_path], ...]
+        其中files_s 是可以与其他元素内的重复的，最终决定编译目标文件hash的是文件名路径+编译参数
+        files_s 甚至可以能使用到其他目录的文件
+        对于没能在cmake中找到的源文件，则可以将includes继承所有，flags设置一些通用的就行，defs使用HAVE_CONFIG这种可以判断的
+        最后一组则是对剩下的未配置源文件和头文件进行整理返回
     """
+    source_file_suffix = set("cpp, c, cc")
+    include_file_suffix = set("h, hpp")
     to_walks = Queue.Queue()
-
-    #[[file_s_set, flags, definitions, includes_ paths],]
-    cmake_infos_list = get_cmake_info(root_path)
-
-    #[[files, flags, definitions, includes, paths], ]
-    transfer_infos = []
-
-    to_walks.put((root_path, , root_path))
-    present_path = ""
-
+    to_walks.put(root_path)
+    # 已经添加过的源文件，将记录下来，除了cmake指定要重复编译，否则不做特殊处理
+    used_file_s_set = set()
+    # 添加所有include，提供给未指定的源文件编译
+    include_set = set()
+    # 添加关注目录
     prefer_paths = set()
     for name in prefers:
         file_path = root_path + "/" + name
         prefer_paths.add(file_path)
 
     level = 0
+    other_file_s = []
     while not to_walks.empty():
-        (present_path, [flags, definitions, include_paths], exec_path) \
-            = to_walks.get()
-
+        present_path = to_walks.get()
         if check_cmake(present_path):
-            file_s_set, flags, definitions, include_paths = get_cmake_info(present_path)
+            info_list = get_cmake_info(present_path, root_path, cmake_build_path)
             exec_path = present_path
+            # 更新
+            for data_dict in info_list:
+                for file in data_dict["source_files"]:
+                    used_file_s_set.add(file)
+                for include in data_dict["includes"]:
+                    relative_include = present_path + "/" + include
+                    if cmake_build_path:
+                        redundance_include = cmake_build_path + "/" + include
+                    else:
+                        redundance_include = root_path + "/" + include
+                    include_set.add(os.path.abspath(relative_include))
+                    include_set.add(os.path.abspath(redundance_include))
+                data_dict["exec_direction"] = exec_path
+            yield info_list
 
-        files = []
         for file_name in os.listdir(present_path):
             file_path = present_path + "/" + file_name
+            file_path = os.path.abspath(file_path)
             if os.path.isdir(file_path):
                 if not level:
                     if file_path in prefer_paths:
-                        to_walks.put((file_path, flags, definitions, include_paths, exec_path))
+                        to_walks.put(file_path)
                 else:
-                    if file_name[0] != '.':                         # 排除了隐藏文件
-                        to_walks.put((file_path, flags, definitions, include_paths, exec_path))
+                    if file_name[0] != '.':
+                        to_walks.put(file_path)
             else:
-                files.append(file_name)
+                if file_path not in used_file_s_set:
+                    slice = file_name.split('.')
+                    suffix = slice[-1]
+                    if suffix in source_file_suffix or suffix in include_file_suffix:
+                        other_file_s.append(file_path)
         level = 1
-        yield [(present_path, files, flags, definitions, include_paths, exec_path), ]
+
+    # 最后构造一份未被cmake定义的源文件的list
+    undefind_files = []
+    for file_path in other_file_s:
+        if file_path not in used_file_s_set:
+            undefind_files.append(file_path)
+    includes = list(include_set)
+    undefind_info_list = [{
+        "source_files": undefind_files,
+        "flags": [],
+        "definitions": [],
+        "includes": includes,
+        "exec_direction": root_path
+    }]
+    yield undefind_info_list
 
 
-def get_present_path_cmake(root_path, prefers, is_outer_project=False, cmake_build_path=None):
+def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
     """
     针对与CMake构建的项目，需要特殊处理一点，不能直接遍历.
 
     :param root_path:               项目根路径
     :param prefers:                 关注目录
-    :param is_outer_project:        是否为外部构建
     :param cmake_build_path:        指定cmake build路径
     :return:
         sub_paths:                  子目录（用于添加include路径）
@@ -361,19 +413,20 @@ def get_present_path_cmake(root_path, prefers, is_outer_project=False, cmake_bui
     """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
-    source_file_suffix = set("cpp, c, cc")
-    include_file_suffix = set("h, hpp")
 
-    # iter 内使用，每次遍历返回回来的exec_path可能是相同的，所以需要extend文件
-    exec_path = ""
-    files_s = []
-    files_h = []
-    defs = []                   # defs应该与执行目录对应
+    source_infos = []
+    for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
+        for info in info_list:
+            if len(info["flags"]) == 0 and len(info["definitions"]) == 0:
+                set_default(info)
+        source_infos.append(info_list)
 
-    # 外部保存使用
-    relative_paths = {exec_path: (files_s, files_h, defs)}
+    return source_infos
 
 
+def set_default(infos):
+    """TODO: 需要设置一下基本的宏定义和编译flags"""
+    pass
 
 
 def get_present_path2(root_path, prefers):
