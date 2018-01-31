@@ -36,7 +36,7 @@ class ProcessBuilder(object):
     """
         使用时，先继承该类，设置logger和进程锁数目，然后需要重写mission和run函数，决定任务分配和数据的保存等。
     """
-    def __init__(self, logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT):
+    def __init__(self, logger=None, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT):
         self.process_amount = process_amount
         self._manager = multiprocessing.Manager()
         self._queue = self._manager.Queue()
@@ -44,6 +44,9 @@ class ProcessBuilder(object):
         if logger is None:
             logger = self._logger_config()
         self._logger = logger
+
+        if process_logger is None:
+            self._process_logger = logger
         self.lock = [self._manager.Lock() for i in range(lock_nums)]     # 创建指定数目的锁
 
     def _logger_config(self, process_log_path=None):
@@ -61,7 +64,7 @@ class ProcessBuilder(object):
                     process_log_path + "/process.log")
         return logger
 
-    def mission(self, queue, locks=[]):
+    def mission(self, queue, result, locks=[]):
         """多进程任务的执行"""
         None
 
@@ -112,40 +115,41 @@ class ProcessBuilder(object):
         self._logger.info("Multiprocess mission Start...")
         start_time = time.clock()
 
-        # 设置进程日志
-        if not process_log_path:
-            filepath = self._logger.handlers[0].baseFilename
-            filename = filepath.split("/")[-1]
-            process_log_path = filepath[:-(len(filename) + 1)]
-        process_logger = self._logger_config(process_log_path)
-
-        # 设置日志信息管道
-        self.__logger_pipe_r, self.__logger_pipe_w = multiprocessing.Pipe(duplex=False)
+        # # 设置进程日志
+        # if not process_log_path:
+        #     filepath = self._logger.handlers[0].baseFilename
+        #     filename = filepath.split("/")[-1]
+        #     process_log_path = filepath[:-(len(filename) + 1)]
+        # process_logger = self._logger_config(process_log_path)
+        #
+        # # 设置日志信息管道
+        # self.__logger_pipe_r, self.__logger_pipe_w = multiprocessing.Pipe(duplex=False)
 
         # 添加全局任务监控进程
         process_list = []
-        p = building_process.multiprocessing.Process(target=self.log_total_missions, \
+        p = multiprocessing.Process(target=self.log_total_missions, \
                 args=(self._queue,))
         process_list.append(p)
         p.start()
 
         for i in range(worker_num):
-            p = multiprocessing.Process(target=self.mission, args=(self._queue, resultlist, \
-                    self.lock, self.__logger_pipe_w,))
+            p = multiprocessing.Process(target=self.mission, \
+                                        args=(self._queue, resultlist, \
+                                        self.lock,))
             process_list.append(p)
             p.start()
 
-        # 添加进程任务打印进程  TODO: 考虑是否可合并
-        p_logger = multiprocessing.Process(target=self.mission_logger, \
-                args=(self.__logger_pipe_r, process_logger,))
-        p_logger.start()
+        # # 添加进程任务打印进程  TODO: 考虑是否可合并
+        # p_logger = multiprocessing.Process(target=self.mission_logger, \
+        #         args=(self.__logger_pipe_r, process_logger,))
+        # p_logger.start()
 
         for p in process_list:
             p.join()
 
         # 在其他进程结束之后对日志模块发出结束信号
-        self.__logger_pipe_w.send("END")
-        p_logger.join()
+        # self.__logger_pipe_w.send("END")
+        # p_logger.join()
 
 
         end_time = time.clock()

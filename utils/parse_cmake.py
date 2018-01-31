@@ -16,7 +16,15 @@ import types
 
 
 def strip_quotation(string):
-    return string.strip("\"\'")
+    if (string[0] == "\"" and string[-1] == "\"") \
+            or (string[0] == "\'" and string[-1] == "\'"):
+        return string[1:-1]
+    elif string[0] == "\"" or string[0] == "\'":
+        return string[1:]
+    elif string[-1] == "\"" or string[-1] == "\'":
+        return string[:-1]
+    else:
+        return string
 
 
 def set_analysis(fin):
@@ -66,7 +74,6 @@ def set_analysis(fin):
                 config[temp_key].append(strip_quotation(arg))
             else:
                 config[temp_key] = []
-
     return config
 
 

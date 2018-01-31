@@ -18,10 +18,9 @@ import os
 import sys
 import subprocess
 import Queue
-import logging
-import logging.config
 import conf.parse_logger as parse_logger
 import time
+import building_process
 
 try:
     import redis
@@ -35,9 +34,8 @@ import utils.parse_cmake as parse_cmake
 SYSTEM_PATH_SEPERATE = "/"
 COMPILE_COMMAND = "gcc"
 
-# 并发构建编译命令
-import building_process
 
+# 并发构建编译命令
 class CommandBuilder(building_process.ProcessBuilder):
     def mission(self, queue, logger_pipe, result_dict, redis_instance, locks=[]):
         lock = locks[0]
@@ -270,6 +268,14 @@ def check_cmake_exec_dest_dirname(file_name):
     return False
 
 
+def get_relative_build_path(path, project_path, cmake_build_path):
+    abs_project_path = os.path.abspath(project_path)
+    abs_present_path = os.path.abspath(path)
+    relative_path = abs_present_path[len(abs_project_path):]
+    present_build_path = cmake_build_path + relative_path
+    return present_build_path
+
+
 def get_cmake_info(present_path, project_path, cmake_build_path=None):
     """
     搜索指定目录下CMakeFiles中的生成目录，并解析出目录下的源文件所需要的编译参数
@@ -281,10 +287,7 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
     """
     present_build_path = present_path
     if cmake_build_path:
-        abs_project_path = os.path.abspath(project_path)
-        abs_present_path = os.path.abspath(present_path)
-        relative_path = abs_present_path[len(abs_project_path):]
-        present_build_path = cmake_build_path + relative_path
+        present_build_path = get_relative_build_path(present_path, project_path, cmake_build_path)
     cmake_files_path = present_build_path + "/CMakeFiles"
     info_list = []
 
@@ -355,13 +358,15 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
                     used_file_s_set.add(file)
                 for include in data_dict["includes"]:
                     relative_include = present_path + "/" + include
+                    relative_build_include = get_relative_build_path(present_path, root_path, cmake_build_path) + "/" + include
                     if cmake_build_path:
                         redundance_include = cmake_build_path + "/" + include
                     else:
                         redundance_include = root_path + "/" + include
+                    include_set.add(os.path.abspath(relative_build_include))
                     include_set.add(os.path.abspath(relative_include))
                     include_set.add(os.path.abspath(redundance_include))
-                data_dict["exec_direction"] = exec_path
+                data_dict["exec_directory"] = exec_path
             yield info_list
 
         for file_name in os.listdir(present_path):
@@ -387,13 +392,14 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
     for file_path in other_file_s:
         if file_path not in used_file_s_set:
             undefind_files.append(file_path)
+    # 同项目路径下的源文件，已经显示被cmake定义的文件的依赖，很大可能是相同的，因此将全部取过来给这部分的源文件使用
     includes = list(include_set)
     undefind_info_list = [{
         "source_files": undefind_files,
         "flags": [],
         "definitions": [],
         "includes": includes,
-        "exec_direction": root_path
+        "exec_directory": root_path
     }]
     yield undefind_info_list
 
@@ -406,27 +412,42 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
     :param prefers:                 关注目录
     :param cmake_build_path:        指定cmake build路径
     :return:
-        sub_paths:                  子目录（用于添加include路径）
-        source_files:               源文件
-        include_files:              头文件
-        source_defs:                源文件编译所需要的宏定义（与源文件一一对应）
+        source_infos
+        include_files
+        files_count
     """
+    source_file_suffix = set("cpp, c, cc")
+    include_file_suffix = set("h, hpp")
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
     source_infos = []
+    files_count = 0
+    include_files = []
     for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
         for info in info_list:
+            if len(info["source_files"]) == 0:
+                continue
             if len(info["flags"]) == 0 and len(info["definitions"]) == 0:
                 set_default(info)
-        source_infos.append(info_list)
+            for file in info["source_files"]:
+                slice = file.split('.')
+                suffix = slice[-1]
+                if suffix not in source_file_suffix:
+                    include_files.append(file)
+                    info["source_files"].remove(file)
+                else:
+                    files_count += 1
+            source_infos.append(info)
 
-    return source_infos
+    return source_infos, include_files, files_count
 
 
 def set_default(infos):
     """TODO: 需要设置一下基本的宏定义和编译flags"""
-    pass
+    infos["flags"] = ["-fPCI", "-o2"]
+    infos["definitions"] = ["HAVE_CONFIG_H"]
+    return
 
 
 def get_present_path2(root_path, prefers):
