@@ -62,7 +62,9 @@ class CommandBuilder(building_process.ProcessBuilder):
                 if definition.find(r'=\"') != -1:
                     lst = re.split(r'\\"', definition)
                     if len(lst) > 2:
-                        definition = lst[0] + "\"" + lst[1] + "\""
+                        # 为空格添加转义符号
+                        lst[1] = lst[1].replace(" ", "\ ")
+                        definition = lst[0] + r"\"" + lst[1] + r"\""
                     else:
                         self._logger.warning("definition %s analysis error" % definition)
                 definition_string += "-D" + definition + " "
@@ -75,10 +77,10 @@ class CommandBuilder(building_process.ProcessBuilder):
             for src in sources:
                 # TODO: 这里不应该用这种转化名，修改该掉, 并且需要增加redis存储 命名映射关系
                 transfer_name = source_path_MD5Calc(src)
-                output_command = self.compile_command + " "
+                output_command = self.compile_command[job_dict["compiler_type"]] + " "
+                output_command += args_string
                 output_command += "-c " + src + " "
                 output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
-                output_command += args_string
 
                 json_dict = {
                     "directory": directory,
@@ -123,8 +125,8 @@ class CommandExec(building_process.ProcessBuilder):
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             print command
             retval = p.wait()
-            for line in p.stdout.readlines():
-                sys.stdout.write(line)
+            #for line in p.stdout.readlines():
+            #    sys.stdout.write(line)
 
             if retval == 0:
                 self._logger.info("compile: %s success" % file)
@@ -353,7 +355,11 @@ class CaptureBuilder(object):
         command_builder = CommandBuilder(self._logger)
         command_builder.distribute_jobs(source_infos)
         # setting
-        command_builder.basic_setting("gcc", self.__output_path)
+        compiler_command_map = {
+            "CXX": "g++",
+            "C": "gcc"
+        }
+        command_builder.basic_setting(compiler_command_map, self.__output_path)
         command_builder.redis_setting()
         result_list = command_builder.run()
         fout = open("result.json", "w")
@@ -362,7 +368,7 @@ class CaptureBuilder(object):
             json_ob = result_list.pop()
             output_list.append(json_ob)
         json.dump(output_list, fout, indent=4)
-        self.command_exec(output_list)
+#        self.command_exec(output_list)
 
     def command_exec(self, output_list):
         command_exec = CommandExec(self._logger)

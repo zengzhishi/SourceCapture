@@ -134,5 +134,5 @@ def parse_cmakeInfo(depen_file):
 
     files_s = filter(lambda file: file[-2:] != ".o", files)
 
-    return files_s, definitions, includes
+    return files_s, definitions, includes, compiler_type
 
