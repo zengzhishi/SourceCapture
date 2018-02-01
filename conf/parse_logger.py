@@ -5,13 +5,15 @@
     @FileName: parse_logger.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-22 17:45:26
-    @LastModif: 2018-01-23 13:25:25
+    @LastModif: 2018-01-29 18:20:38
     @Note:
 """
 
 import logging
 import logging.config
 import ConfigParser
+
+import re
 
 level_maps = {
         "NOSET" : logging.NOTSET,
@@ -25,16 +27,23 @@ level_maps = {
 # 目前只支持这样
 handler_maps = {
         "FileHandler": logging.FileHandler,
-        "RotatingFileHandler": logging.handlers.RotatingFileHandler,
+        "StreamHandler": logging.StreamHandler,
         }
 
 
-class logger_analysis(object):
-    def __init__(self, log_conf_path):
-        self._path = log_conf_path
-        self.__config__()
+class LoggerAnalysis(object):
+    def __init__(self, log_conf_path=None):
+        if log_conf_path is not None:
+            self._path = log_conf_path
+            self._config()
+        else:
+            None
 
-    def __config__(self):
+    def _basic_config(self):
+        self._logger = logging.getLogger("Capture")
+        None
+
+    def _config(self):
         self._config = ConfigParser.ConfigParser()
         self._config.read(self._path)
         _loggers_str = self._config.get("loggers", "keys")
@@ -43,11 +52,11 @@ class logger_analysis(object):
         self._loggers = _loggers_str.split(",")
         self._handlers = _handlers_str.split(",")
         self._formatters = _formatters_str.split(",")
-        self.__get_formatters__()
-        self.__get_Handler__()
-        self.__get_loggers__()
+        self._get_formatters()
+        self._get_Handler()
+        self._get_loggers()
 
-    def __format_reader__(self, field, key):
+    def _format_reader(self, field, key):
         """由于ConfigParser未能读取format，因此需要重新读取返回内容自己解析"""
         start = False
         with open(self._path, 'r') as _config_reader:
@@ -60,17 +69,17 @@ class logger_analysis(object):
                         return lst[1].strip('\'\n ')
         return ""
 
-    def __get_formatters__(self):
+    def _get_formatters(self):
         self.formatters = {}
         for formatter in self._formatters:
             field = "formatter_" + formatter
-            format_string = self.__format_reader__(field, "format")
+            format_string = self._format_reader(field, "format")
             if format_string:
                 self.formatters[formatter] = logging.Formatter(format_string)
             else:
                 self.formatters[formatter] = logging.Formatter()
 
-    def __get_loggers__(self):
+    def _get_loggers(self):
         self.loggers = {}
         for logger_name in self._loggers:
             field = "logger_" + logger_name
@@ -87,7 +96,7 @@ class logger_analysis(object):
                     logger.addHandler(self.handlers[handler_name])
             self.loggers[logger_name] = logger
 
-    def __get_Handler__(self):
+    def _get_Handler(self):
         self.handlers = {}
         for handler_name in self._handlers:
             field = "handler_" + handler_name
@@ -113,5 +122,41 @@ class logger_analysis(object):
             logger.removeHandler(logger.handlers[0])
             logger.addHandler(rfh)
         return logger
+
+
+def getLogger(conf, logger_field="captureExample", new_output=None):
+    """
+    配置log, 这里只针对FileHandler做修改
+
+    conf:                   logging.conf配置文件路径
+    logger_field:           logger_name
+    new_output:             是否需要重新指定输出文件
+    """
+    logging.config.fileConfig(conf)
+    logger = logging.getLogger(logger_field)
+
+    if new_output:
+        origin_handle = logger.handlers[0]
+        if type(origin_handle) != logging.FileHandler:
+            return
+
+        new_handle = logging.FileHandler(new_output, origin_handle.mode)
+        formatter = origin_handle.formatter
+        new_handle.formatter = formatter
+
+        if origin_handle.level:
+            new_handle.level = origin_handle.level
+
+        if origin_handle.encoding:
+            new_handle.encoding = origin_handle.encoding
+
+        logger.removeHandler(logger.handlers[0])
+        logger.addHandler(new_handle)
+    return logger
+
+
+if __name__ == "__main__":
+    pass
+
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

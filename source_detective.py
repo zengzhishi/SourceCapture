@@ -1,18 +1,32 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
+#################################################################################################
+#  TODO: 修改之后的思路
+#  1. 改变目录搜索获取参数的方式，针对与可以使用cmake的目录，可以采用更加方便的方式，
+#  通过获取每个含有CMakeList.txt目录下的flags.make，可以获得编译参数，头文件引用路径，和宏定义
+#  需要做的工作只是获取这些，同时返回有哪些头文件和源文件即可，遍历上不需要将所有自路径都添加进来
+#   (done)
+#  2. 针对使用automake工具的项目，还需要研究一下
+#  3. 针对直接使用Makefile的，可以通过添加一个伪目标，利用@echo来输出需要使用到的FLAGS参数，
+#  但是由于命名和写法的不一致，可能需要做整个依赖关系的解析，得到最终需要使用到的flag参数对应的
+#  变量
+#
+#################################################################################################
+
 import re
 import os
 import sys
 import subprocess
 import Queue
-import logging
-import logging.config
-import parse_logger
 
-#logging.config.fileConfig("logging.conf")
-#logger = logging.getLogger("compileLog")
+try:
+    import redis
+except ImportError:
+    sys.path.append("./utils")
+    import redis
 
+import utils.parse_cmake as parse_cmake
 
 def get_system_path():
     """
@@ -31,6 +45,246 @@ def get_system_path():
         return lines, False
 
 
+def get_directions(path):
+    """获取指定路径下的所有目录"""
+    paths = []
+    for one in os.listdir(path):
+        if os.path.isdir(path + "/" + one):
+            paths.append(one)
+    return paths
+
+
+# cmake project
+def check_cmake(path):
+    """
+    检查是否有CMakeList.txt
+    :param path:
+    :return:        bool
+    """
+    #check CMakeList.txt is exist
+    if os.path.exists(path + "/CMakeLists.txt"):
+        return True
+    return False
+
+
+def check_cmake_exec_dest_dirname(file_name):
+    """
+    防止异常目录干扰
+    :param file_name:
+    :return:
+    """
+    if file_name[-4:] == ".dir":
+        return True
+    return False
+
+
+def get_relative_build_path(path, project_path, cmake_build_path):
+    abs_project_path = os.path.abspath(project_path)
+    abs_present_path = os.path.abspath(path)
+    relative_path = abs_present_path[len(abs_project_path):]
+    present_build_path = cmake_build_path + relative_path
+    return present_build_path
+
+
+def set_default(infos):
+    """TODO: 需要设置一下基本的宏定义和编译flags"""
+    infos["flags"] = ["-fPIC", "-o2"]
+    infos["definitions"] = ["HAVE_CONFIG_H"]
+    return
+
+
+def get_cmake_info(present_path, project_path, cmake_build_path=None):
+    """
+    搜索指定目录下CMakeFiles中的生成目录，并解析出目录下的源文件所需要的编译参数
+
+    :param present_path:                            当前检索路径
+    :param project_path:                            项目根路径
+    :param cmake_build_path:                        cmake外部编译路径
+    :return:
+    """
+    present_build_path = present_path
+    if cmake_build_path:
+        final_build_path = cmake_build_path
+    else:
+        final_build_path = project_path
+    present_build_path = get_relative_build_path(present_path, project_path, final_build_path)
+    cmake_files_path = present_build_path + "/CMakeFiles"
+    info_list = []
+
+    for file_name in os.listdir(cmake_files_path):
+        file_path = cmake_files_path + "/" + file_name
+        if os.path.isdir(file_path) and check_cmake_exec_dest_dirname(file_name):
+            # 目标目录
+            flags_file = file_path + "/flags.make"
+            depend_file = file_path + "/DependInfo.cmake"
+            if os.path.exists(flags_file) and os.path.exists(depend_file):
+                depend_s_files, definitions, includes, compiler_type \
+                    = parse_cmake.parse_cmakeInfo(depend_file)
+                flags = parse_cmake.parse_flags(flags_file)
+                includes = map(lambda relative_path: os.path.abspath(final_build_path + "/" + relative_path), includes)
+                info_list.append({
+                    "source_files": depend_s_files,
+                    "flags": flags,
+                    "definitions": definitions,
+                    "includes": includes,
+                    "compiler_type": compiler_type
+                })
+
+    # 对于有定义CMakeLists.txt文件，但是没有配置编译选项的情况
+    if len(info_list) == 0:
+        info_list.append({
+            "source_files": [],
+            "flags": [],
+            "definitions": [],
+            "includes": [],
+            "compiler_type": ""
+        })
+    return info_list
+
+
+def cmake_project_walk(root_path, prefers, cmake_build_path=None):
+    """
+    寻找根路径下project组成, 返回应该以CMake的一个set为准
+    :param root_path:
+    :param prefers:
+    :return:    [present_path, files_s_infos, files_h]
+        files_s_infos -> list
+        files_s_infos = [[files_s, flags, defs, includes, exec_path], ...]
+        其中files_s 是可以与其他元素内的重复的，最终决定编译目标文件hash的是文件名路径+编译参数
+        files_s 甚至可以能使用到其他目录的文件
+        对于没能在cmake中找到的源文件，则可以将includes继承所有，flags设置一些通用的就行，defs使用HAVE_CONFIG这种可以判断的
+        最后一组则是对剩下的未配置源文件和头文件进行整理返回
+    """
+    source_file_suffix = set(["cpp", "c", "cc", "cxx"])
+    include_file_suffix = set(["h", "hpp"])
+    to_walks = Queue.Queue()
+    to_walks.put(root_path)
+    # 已经添加过的源文件，将记录下来，除了cmake指定要重复编译，否则不做特殊处理
+    used_file_s_set = set()
+    # 添加所有include，提供给未指定的源文件编译
+    include_set = set()
+    # 添加关注目录
+    prefer_paths = set()
+    for name in prefers:
+        file_path = root_path + "/" + name
+        prefer_paths.add(file_path)
+
+    level = 0
+    other_file_s = []
+    while not to_walks.empty():
+        present_path = to_walks.get()
+        if check_cmake(present_path):
+            info_list = get_cmake_info(present_path, root_path, cmake_build_path)
+            if cmake_build_path:
+                exec_path = cmake_build_path
+            else:
+                exec_path = root_path
+            # 更新
+            for data_dict in info_list:
+                for file in data_dict["source_files"]:
+                    used_file_s_set.add(file)
+                for include in data_dict["includes"]:
+                    include_set.add(include)
+                data_dict["exec_directory"] = exec_path
+            yield info_list
+
+        for file_name in os.listdir(present_path):
+            file_path = present_path + "/" + file_name
+            file_path = os.path.abspath(file_path)
+            if os.path.isdir(file_path):
+                if not level:
+                    if file_path in prefer_paths:
+                        to_walks.put(file_path)
+                else:
+                    if file_name[0] != '.':
+                        to_walks.put(file_path)
+            else:
+                if file_path not in used_file_s_set:
+                    slice = file_name.split('.')
+                    suffix = slice[-1]
+                    if suffix in source_file_suffix or suffix in include_file_suffix:
+                        other_file_s.append(file_path)
+        level = 1
+
+    # 最后构造一份未被cmake定义的源文件的list
+    undefind_files = []
+    for file_path in other_file_s:
+        if file_path not in used_file_s_set:
+            undefind_files.append(file_path)
+    # 同项目路径下的源文件，已经显示被cmake定义的文件的依赖，很大可能是相同的，因此将全部取过来给这部分的源文件使用
+    includes = list(include_set)
+    undefind_info_list = [{
+        "source_files": undefind_files,
+        "flags": [],
+        "definitions": [],
+        "includes": includes,
+        "exec_directory": root_path,
+        "compiler_type": ""
+    }]
+    yield undefind_info_list
+
+
+def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
+    """
+    针对与CMake构建的项目，需要特殊处理一点，不能直接遍历.
+
+    :param root_path:               项目根路径
+    :param prefers:                 关注目录
+    :param cmake_build_path:        指定cmake build路径
+    :return:
+        source_infos
+        include_files
+        files_count
+    """
+    # TODO: 这些set可以写到globle中，没必要每个地方配置一个
+    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
+    c_file_suffix = set(["c"])
+    cxx_file_suffix = set(["cpp", "cxx", "cc", "c++"])
+    include_file_suffix = set(["h", "hpp"])
+    if len(prefers) == 0:
+        prefers = ["src", "include", "lib", "modules"]
+
+    source_infos = []
+    files_count = 0
+    include_files = []
+    cxx_files_info = {
+        "source_files": [],
+        "exec_directory": root_path,
+        "compiler_type": "CXX"
+    }
+    for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
+        for info in info_list:
+            if len(info["source_files"]) == 0:
+                continue
+            if not info["compiler_type"]:
+                set_default(info)
+                cxx_files_info["flags"] = info["flags"]
+                cxx_files_info["definitions"] = info["definitions"]
+                cxx_files_info["includes"] = info["includes"]
+                lefts_s = []
+                for file in info["source_files"]:
+                    slice = file.split('.')
+                    suffix = slice[-1]
+                    if suffix not in source_file_suffix:
+                        include_files.append(file)
+                    else:
+                        if suffix in cxx_file_suffix:
+                            cxx_files_info["source_files"].append(file)
+                        elif suffix in c_file_suffix:
+                            lefts_s.append(file)
+                        files_count += 1
+                info["source_files"] = lefts_s
+                info["compiler_type"] = "C"
+            else:
+                files_count += len(info["source_files"])
+            source_infos.append(info)
+    if len(cxx_files_info["source_files"]):
+        source_infos.append(cxx_files_info)
+
+    return source_infos, include_files, files_count
+
+
+# autotools project
 def get_definitions(path):
     ## TODO 可以选择一个类来封装，使得该方法可以被重写
     """获取当前路径下Makefile.am中的宏定义"""
@@ -86,8 +340,9 @@ def selective_walk(root_path, prefers):
         yield (present_path, files, def_str)
 
 
-def get_present_path2(root_path, prefers):
+def get_present_path_autotools(root_path, prefers):
     """
+    遍历项目的目录结构，获取project_info
     Args:
         root_path:          项目根目录
         prefers:            关注路径（全选时，可能会出现example等涉及到未安装对应库的文件失败，
@@ -126,149 +381,4 @@ def get_present_path2(root_path, prefers):
                     files_h.append(folder + "/" + file_name)
     return paths, files_s, files_h, files_s_defs
 
-
-def get_present_path(root_path):
-    """
-    获取源码路径下的子路径
-    """
-    source_file_suffix = set("cpp, c, cc")
-    include_file_suffix = set("h, hpp")
-    paths = []
-    files_s = []
-    files_h = []
-    for line_tulpe in os.walk(root_path):
-        print line_tulpe
-        folder = line_tulpe[0]
-        file_paths = line_tulpe[-1]
-        paths.append(folder)
-        for file_path in file_paths:
-            slice = file_path.split('.')
-            suffix = slice[-1]
-            if len(slice) > 1:
-                print "="*20 + suffix
-                if suffix in source_file_suffix:
-                    files_s.append(folder + "/" + file_path)
-                elif suffix in include_file_suffix:
-                    files_h.append(folder + "/" + file_path)
-    return paths, files_s, files_h
-
-
-def get_dir(path):
-    paths = []
-    for one in os.listdir(path):
-        if os.path.isdir(path + "/" + one):
-            paths.append(one)
-    return paths
-
-
-if __name__ == "__main__":
-    output_path = ""
-    if len(sys.argv) == 2:
-        input_path = sys.argv[1]
-        prefers_str = ""
-    elif len(sys.argv) == 3:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-    elif len(sys.argv) == 4:
-        # 增加了输出目录
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-    else:
-        sys.stderr.write("""Please input project root path to compiler.
-    Usage:
-        ./program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path]
-""")
-        sys.exit()
-
-    if len(input_path) > 1 and input_path[-1] == '/':
-        input_path = input_path[:-1]
-
-
-    # 设置编译脚本输出目录和日志输出
-    logger_builder = parse_logger.logger_analysis("capture.cfg")
-    command_output_path = input_path
-    if output_path:
-        command_output_path = output_path
-        logger = logger_builder.get_Logger("simpleExample", output_path + "/capture.log")
-    else:
-        logger = logger_builder.get_Logger("simpleExample", "capture.log")
-
-    logger.info("Loading config complete")
-
-    if prefers_str == "":
-        prefers = []
-    elif prefers_str == "all":
-        prefers = get_dir(input_path)
-    else:
-        prefers = prefers_str.split(",")
-    logger.debug("prefer directories: " + str(prefers))
-
-    logger.info("Start Scaning project folders...")
-    # system_paths, status = get_system_path()
-    sub_paths, files_s, files_h, files_s_defs = get_present_path2(input_path, prefers)
-    logger.info("End of Scaning project folders...")
-
-    # add Include path
-    gcc_include_string = ""
-    for path in sub_paths:
-        gcc_include_string = gcc_include_string + " " + "-I" + path
-
-    # TODO 对输出命令进行构建，可以抽取成一个单独的模块
-    gcc_string = "gcc"
-
-    logger.info("checking configure file...")
-    is_has_configure = os.path.exists(input_path + "/configure")
-    if is_has_configure:
-        logger.info(input_path + "/configure" + " is exists.")
-        gcc_string += " -DHAVE_CONFIG_H"
-
-    # 导出目录扫描数据
-    import capture
-    logger.info("Dumping scaned data")
-    source_files = [x[0] for x in files_s]
-    capture.scan_data_dump(command_output_path + "/" + "project_scan.json",
-            source_files,
-            files_s_defs,
-            files_h,
-            sub_paths,
-            is_has_configure
-            )
-    logger.info("Dumping scaned data success")
-
-    commands = []
-    logger.info("Start building compile commands")
-
-    with open(command_output_path + "/" + "my_compile.sh", "w+") as fout:
-        for source_file_tuple, definition in zip(files_s, files_s_defs):
-            source_file = source_file_tuple[0]
-            suffix = source_file.split(".")[-1]
-            index = -(len(suffix))
-            file_name = source_file.split("/")[-1]
-            file_index = -(len(file_name) + 1)
-            output_path_str = output_path
-            if not output_path_str:
-                output_path_str = source_file[:file_index]
-            else:
-                # 设置输出目录
-                output_path_str = output_path_str + "/fileCache"
-                if not os.path.exists(output_path_str):
-                    os.makedirs(output_path_str)
-            output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
-            makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
-            fout.write(makestring + "\n")
-            commands.append(makestring)
-
-    logger.info("Dumping compiler commands complete")
-
-    logger.info("Start dumping commands")
-    # 导出生成的编译命令
-    capture.commands_dump(command_output_path + "/compile_commands.json",
-            source_files,
-            commands,
-            [command_output_path for i in source_files]
-            )
-    logger.info("Dumping commands success")
-
-    logger.info("Complete")
 
