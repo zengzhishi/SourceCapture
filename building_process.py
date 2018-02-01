@@ -84,13 +84,14 @@ class ProcessBuilder(object):
         if total_count == 0:
             self._logger.warning("No data in job queue.")
             return
-        last_time = total_count
         left_count = total_count
+        last_time = left_count
         self._logger.info("Mission process: %f %%" % 0.0)
         while left_count != 0:
-            if left_count != total_count:
+            if left_count != total_count and last_time != left_count:
                 self._logger.info("Mission process: %f %%" % \
                     ((total_count - left_count) / float(total_count) * 100.0))
+                last_time = left_count
             time.sleep(check_interval)
             left_count = queue.qsize()
         self._logger.info("Mission process: %f %%" % \
@@ -115,16 +116,6 @@ class ProcessBuilder(object):
         self._logger.info("Multiprocess mission Start...")
         start_time = time.clock()
 
-        # # 设置进程日志
-        # if not process_log_path:
-        #     filepath = self._logger.handlers[0].baseFilename
-        #     filename = filepath.split("/")[-1]
-        #     process_log_path = filepath[:-(len(filename) + 1)]
-        # process_logger = self._logger_config(process_log_path)
-        #
-        # # 设置日志信息管道
-        # self.__logger_pipe_r, self.__logger_pipe_w = multiprocessing.Pipe(duplex=False)
-
         # 添加全局任务监控进程
         process_list = []
         p = multiprocessing.Process(target=self.log_total_missions, \
@@ -139,18 +130,8 @@ class ProcessBuilder(object):
             process_list.append(p)
             p.start()
 
-        # # 添加进程任务打印进程  TODO: 考虑是否可合并
-        # p_logger = multiprocessing.Process(target=self.mission_logger, \
-        #         args=(self.__logger_pipe_r, process_logger,))
-        # p_logger.start()
-
         for p in process_list:
             p.join()
-
-        # 在其他进程结束之后对日志模块发出结束信号
-        # self.__logger_pipe_w.send("END")
-        # p_logger.join()
-
 
         end_time = time.clock()
         self._logger.info("All Process Time: %f" % (end_time - start_time))

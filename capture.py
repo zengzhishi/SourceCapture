@@ -75,8 +75,8 @@ class CommandBuilder(building_process.ProcessBuilder):
 
             sources = job_dict["source_files"]
             for src in sources:
-                # TODO: 这里不应该用这种转化名，修改该掉, 并且需要增加redis存储 命名映射关系
-                transfer_name = source_path_MD5Calc(src)
+                transfer_name = file_args_MD5Calc(src, \
+                            job_dict["flags"], job_dict["definitions"], job_dict["includes"])
                 output_command = self.compile_command[job_dict["compiler_type"]] + " "
                 output_command += args_string
                 output_command += "-c " + src + " "
@@ -111,22 +111,13 @@ class CommandExec(building_process.ProcessBuilder):
             file = job_dict["file"]
             command = job_dict["command"]
 
-            cmd = "cd %s" % directory
+            cmd = "cd %s" % directory + "; " + command
+
             p = subprocess.Popen(cmd, shell=True, \
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             retval = p.wait()
-
-            if retval != 0:
-                self._logger.warning("[%s] exec fail" % cmd)
-            else:
-                sys.stdout.write(cmd + "\n")
-
-            p = subprocess.Popen(command, shell=True, \
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            print command
-            retval = p.wait()
-            #for line in p.stdout.readlines():
-            #    sys.stdout.write(line)
+            for line in p.stdout.readlines():
+               sys.stdout.write(line)
 
             if retval == 0:
                 self._logger.info("compile: %s success" % file)
@@ -138,6 +129,7 @@ class CommandExec(building_process.ProcessBuilder):
 
         self._logger.info("Process pid:%d Complete." % pid)
         return
+
 
 def bigFileMD5Calc(file):
     """逐步更新计算文件MD5"""
@@ -180,6 +172,26 @@ def file_transfer(filename, path):
         print "File size > 1M, use big file calc"
         return bigFileMD5Calc(file)
     return fileMD5Calc(file)
+
+
+def file_args_MD5Calc(file, flags, definitions, includes):
+    """
+    文件可能被多次编译，因此需要用编译参数加到一起来标识一个目标
+    :param file:
+    :param flags:
+    :param definitions:
+    :param includes:
+    :return:
+    """
+    m = hashlib.md5()
+    m.update(file)
+
+    args = (flags, definitions, includes)
+    for configs in args:
+        configs.sort()
+        for line in configs:
+            m.update(line)
+    return m.hexdigest()
 
 
 def file_info_save(redis_instance, filename, source_path, transfer_name, definition, flags):
@@ -368,7 +380,7 @@ class CaptureBuilder(object):
             json_ob = result_list.pop()
             output_list.append(json_ob)
         json.dump(output_list, fout, indent=4)
-#        self.command_exec(output_list)
+        self.command_exec(output_list)
 
     def command_exec(self, output_list):
         command_exec = CommandExec(self._logger)
@@ -393,7 +405,7 @@ def parse_prefer_str(prefer_str, input_path):
 
 def main():
     """主要逻辑"""
-    # TODO: 抽取新的目录扫描逻辑
+    # TODO: 使用比较简洁一点的参数输入方式
     output_path = ""
     prefers_str = ""
     make_type = "cmake"
