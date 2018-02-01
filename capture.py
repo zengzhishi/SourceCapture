@@ -386,6 +386,7 @@ class CaptureBuilder(object):
         command_exec = CommandExec(self._logger)
         command_exec.distribute_jobs(output_list)
         command_exec.run()
+        return
 
 
 def get_system_compiler_path(compiler_type):
