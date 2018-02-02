@@ -298,9 +298,10 @@ class CaptureBuilder(object):
                  output_path=None,
                  build_type="cmake",
                  build_path=None,
+                 prefers = [],
                  compiler_type=DEFAULT_COMPILE_COMMAND, \
                  compiler_path=None):
-        self.__prefers = []
+        self.__prefers = prefers
         self.__root_path = os.path.abspath(root_path)
         self.compiler_type = compiler_type
         self.__build_type = build_type
@@ -352,8 +353,63 @@ class CaptureBuilder(object):
         if self.__build_type == "cmake":
             if not self.__build_path:
                 self.__build_path = self.__root_path + "/build"
-            source_infos, include_files, files_count= \
+            source_infos, include_files, files_count = \
                source_detective.get_present_path_cmake(self.__root_path, self.__prefers, self.__build_path)
+        elif self.__build_type == "make":   # TODO: 添加普通项目的Makefile解析
+            sub_paths, files_s, files_h, files_s_defs = \
+                source_detective.get_present_path_autotools(self.__root_path, self.__prefers)
+            gcc_string = "gcc"
+
+            # is_has_configure = os.path.exists(self.__root_path + "/configure")
+            # if is_has_configure:
+            gcc_string += " -DHAVE_CONFIG_H"
+
+            gcc_include_string = ""
+            for path in sub_paths:
+                gcc_include_string = gcc_include_string + " " + "-I" + path
+
+            source_files = [x[0] for x in files_s]
+            commands = []
+            with open(self.__output_path + "/" + "my_compile.sh", "w+") as fout:
+                for source_file_tuple, definition in zip(files_s, files_s_defs):
+                    source_file = source_file_tuple[0]
+                    suffix = source_file.split(".")[-1]
+                    index = -(len(suffix))
+                    file_name = source_file.split("/")[-1]
+                    file_index = -(len(file_name) + 1)
+                    output_path_str = self.__output_path
+                    if not output_path_str:
+                        output_path_str = source_file[:file_index]
+                    else:
+                        # 设置输出目录
+                        output_path_str = output_path_str + "/fileCache"
+                        if not os.path.exists(output_path_str):
+                            os.makedirs(output_path_str)
+                    output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
+                    makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
+                    fout.write(makestring + "\n")
+                    commands.append(makestring)
+            commands_dump(self.__output_path + "/compile_commands.json",
+                          source_files,
+                          commands,
+                          [self.__output_path for i in source_files]
+                        )
+            return [], [], []
+
+            pass
+        else:   # 连Makefile都没有，直接构建
+            """
+            TODO: 扫描用Makefile直接构建的项目
+                1. 先获取所有的源文件, 头文件
+                2. 根据源文件去获取对应的目标文件是怎产生的,
+                    (1) make -d -n -k, 其中-n是为不实际执行make, 然后将输出的文本进行检索,构建出所依赖的变量
+                    (2) 写入伪目标到Makefile中, 伪目标的操作主要是打印我们需要的参数值
+                    (3) 获取返回值, 解析这些返回值
+                3. 根据截获的参数构建出源文件的编译命令
+            """
+            paths, files_s, files_h = \
+                source_detective.get_present_path_make(self.__root_path, self.__prefers)
+            pass
         self._logger.info("End of Scaning project folders...")
 
         # Test
@@ -398,7 +454,7 @@ def parse_prefer_str(prefer_str, input_path):
     if prefer_str == "":
         prefers = []
     if prefer_str == "all":
-        prefers = source_detective.get_dir(input_path)
+        prefers = source_detective.get_directions(input_path)
     else:
         prefers = prefer_str.strip(' \n\t').split(",")
     return prefers
@@ -410,6 +466,7 @@ def main():
     output_path = ""
     prefers_str = ""
     make_type = "cmake"
+    cmake_build_path = ""
     if len(sys.argv) == 2:
         input_path = sys.argv[1]
     elif len(sys.argv) == 3:
@@ -457,7 +514,7 @@ def main():
 
     # CaptureBuilder
     capture_builder = CaptureBuilder(logger, input_path, output_path, \
-                                     build_type=make_type, build_path=cmake_build_path)
+                                     prefers=prefers, build_type=make_type, build_path=cmake_build_path)
     source_infos, include_files, files_count = capture_builder.scan_project()
 
     capture_builder.command_prebuild(source_infos, files_count)
