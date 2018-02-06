@@ -115,7 +115,7 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
     cmake_files_path = present_build_path + "/CMakeFiles"
     info_list = []
 
-    def _is_abs_path(path):
+    def _get_abs_path(path):
         if path[0] == "/":
             return path
         return os.path.abspath(final_build_path + "/" + path)
@@ -127,17 +127,36 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
             flags_file = file_path + "/flags.make"
             depend_file = file_path + "/DependInfo.cmake"
             if os.path.exists(flags_file) and os.path.exists(depend_file):
-                depend_s_files, definitions, includes, compiler_type \
-                    = parse_cmake.parse_cmakeInfo(depend_file)
-                flags = parse_cmake.parse_flags(flags_file)
-                includes = map(lambda relative_path: _is_abs_path(relative_path), includes)
-                info_list.append({
-                    "source_files": depend_s_files,
-                    "flags": flags,
-                    "definitions": definitions,
-                    "includes": includes,
-                    "compiler_type": compiler_type
-                })
+                cmake_infos = parse_cmake.parse_cmakeInfo(depend_file)
+                origin_flags, origin_custom_flags, origin_custom_definitions= parse_cmake.parse_flags(flags_file)
+                for [depend_files, definitions, includes, compiler_type], flags in zip(cmake_infos, origin_flags):
+                    includes = map(lambda relative_path: _get_abs_path(relative_path), includes)
+                    custom_flags = {}
+                    custom_definitions = {}
+                    depend_s_files = filter(lambda file: file[-2:] != ".o", depend_files)
+                    for key in origin_custom_flags:
+                        abs_file_path = final_build_path + os.path.sep + key
+                        if abs_file_path in depend_files:
+                            index = depend_files.index(abs_file_path)
+                            source_file_path = depend_files[index - 1]
+                            index = depend_s_files.index(source_file_path)
+                            custom_flags[index] = origin_custom_flags[key]
+                    for key in origin_custom_definitions:
+                        abs_file_path = final_build_path + os.path.sep + key
+                        if abs_file_path in depend_files:
+                            index = depend_files.index(abs_file_path)
+                            source_file_path = depend_files[index - 1]
+                            index = depend_s_files.index(source_file_path)
+                            custom_definitions[index] = origin_custom_definitions[key]
+                    info_list.append({
+                        "source_files": depend_s_files,
+                        "flags": flags,
+                        "definitions": definitions,
+                        "includes": includes,
+                        "compiler_type": compiler_type,
+                        "custom_flags": custom_flags,
+                        "custom_definitions": custom_definitions
+                    })
 
     # 对于有定义CMakeLists.txt文件，但是没有配置编译选项的情况
     if len(info_list) == 0:

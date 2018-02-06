@@ -74,11 +74,32 @@ class CommandBuilder(building_process.ProcessBuilder):
             args_string = flag_string + definition_string + include_string
 
             sources = job_dict["source_files"]
-            for src in sources:
+            custom_flags = job_dict["custom_flags"]
+            custom_definitions = job_dict["custom_definitions"]
+            for i in range(len(sources)):
+                src = sources[i]
+                # custom
+                custom_args_string = ""
+                if i in custom_flags:
+                    for flag in custom_flags[i]:
+                        custom_args_string += flag + " "
+                if i in custom_definitions:
+                    for definition in custom_definitions[i]:
+                        if definition.find(r'=\"') != -1:
+                            lst = re.split(r'\\"', definition)
+                            if len(lst) > 2:
+                                # 为空格添加转义符号
+                                lst[1] = lst[1].replace(" ", "\ ")
+                                definition = lst[0] + r"\"" + lst[1] + r"\""
+                            else:
+                                self._logger.warning("custom definition %s analysis error" % definition)
+                        custom_args_string += "-D" + definition + " "
+
                 transfer_name = file_args_MD5Calc(src, \
-                            job_dict["flags"], job_dict["definitions"], job_dict["includes"])
+                                      job_dict["flags"], job_dict["definitions"], job_dict["includes"], custom_args_string)
                 output_command = self.compile_command[job_dict["compiler_type"]] + " "
                 output_command += args_string
+                output_command += custom_args_string
                 output_command += "-c " + src + " "
                 output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
 
@@ -121,6 +142,11 @@ class CommandExec(building_process.ProcessBuilder):
 
             if retval == 0:
                 self._logger.info("compile: %s success" % file)
+                p = subprocess.Popen("ls result/* | wc -l", shell=True, \
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                p.wait()
+                line = p.stdout.read()
+                self._logger.debug("%s success, files count: %s" % (file, line))
             else:
                 self._logger.warning("compile: %s fail" % file)
 
@@ -174,13 +200,14 @@ def file_transfer(filename, path):
     return fileMD5Calc(file)
 
 
-def file_args_MD5Calc(file, flags, definitions, includes):
+def file_args_MD5Calc(file, flags, definitions, includes, custom_arg):
     """
     文件可能被多次编译，因此需要用编译参数加到一起来标识一个目标
     :param file:
     :param flags:
     :param definitions:
     :param includes:
+    :param custom_arg:
     :return:
     """
     m = hashlib.md5()
@@ -191,6 +218,8 @@ def file_args_MD5Calc(file, flags, definitions, includes):
         configs.sort()
         for line in configs:
             m.update(line)
+    if custom_arg:
+        m.update(custom_arg)
     return m.hexdigest()
 
 
@@ -517,7 +546,8 @@ def main():
                                      prefers=prefers, build_type=make_type, build_path=cmake_build_path)
     source_infos, include_files, files_count = capture_builder.scan_project()
 
-    capture_builder.command_prebuild(source_infos, files_count)
+    # 暂时不编译违背cmake 定义的源文件
+    capture_builder.command_prebuild(source_infos[:-2], files_count)
 
 
 if __name__ == "__main__":

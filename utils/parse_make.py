@@ -27,7 +27,7 @@ def create_infos(root_path, output_path, makefile_name="Makefile", make_args=Non
     if not os.path.exists(make_file):
         raise IOError("No Makefile in " + root_path)
 
-    cmd = "cd " + root_path + "; make -n -p -k "
+    cmd = "cd " + root_path + "; make -qp "
     if make_args:
         cmd += make_args
 
@@ -54,18 +54,38 @@ def block_read(fin):
     return lines
 
 
+def search_target_line(lines):
+    """如果有多个配置行，获取EXTRA config，并找到target line"""
+    pravite_config_lines = []
+    for line in lines:
+        config_line_match = re.match("^\w+.*\s*:\s*", line)
+        if config_line_match:
+            pravite_config_lines.append(line)
+    if len(pravite_config_lines) > 1:
+        for i in range(len(pravite_config_lines) - 1):
+            line = lines[i]
+            target, config = re.split("\s*:\s*", line)
+            configs = re.split("")
+
+
 def analysis_block(lines):
     """
     解析块行的配置,得到目标文件所需要的参数
     :param lines:
     :return:
     """
+    target_line = 0
+    print lines[0]
     # 非目标, 可能是依赖文件或内置对象
     if lines[0] == "# Not a target:":
         return {}
+    elif lines[0] == '# makefile (from \'Makefile\'':
+        # 可能会导致问题
+        target_line += 1
 
-    print lines[0]
-    target, depend = re.split("\s*:\s*", lines[0])
+    if target_line != 0:
+        target_line = search_target_line(lines)
+        target, depend = re.split("\s*:\s*", lines[target_line])
     if len(depend) == 0:
         # 伪目标, 暂时先不管, 后面有需要再完成
         params_dict = {}

@@ -16,7 +16,8 @@ import conf.parse_logger as parse_logger
 
 
 # 默认配置
-CPU_CORE_COUNT = multiprocessing.cpu_count()
+#CPU_CORE_COUNT = multiprocessing.cpu_count()
+CPU_CORE_COUNT = 1
 
 
 class ProcessBuilder(object):
