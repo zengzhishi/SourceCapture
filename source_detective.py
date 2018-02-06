@@ -128,7 +128,7 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
             depend_file = file_path + "/DependInfo.cmake"
             if os.path.exists(flags_file) and os.path.exists(depend_file):
                 cmake_infos = parse_cmake.parse_cmakeInfo(depend_file)
-                origin_flags, origin_custom_flags, origin_custom_definitions= parse_cmake.parse_flags(flags_file)
+                origin_flags, origin_custom_flags, origin_custom_definitions = parse_cmake.parse_flags(flags_file)
                 for [depend_files, definitions, includes, compiler_type], flags in zip(cmake_infos, origin_flags):
                     includes = map(lambda relative_path: _get_abs_path(relative_path), includes)
                     custom_flags = {}
@@ -202,6 +202,7 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
     while not to_walks.empty():
         present_path = to_walks.get()
         if check_cmake(present_path, root_path, cmake_build_path):
+            print "\tscan path:" + present_path
             info_list = get_cmake_info(present_path, root_path, cmake_build_path)
             if cmake_build_path:
                 exec_path = cmake_build_path

@@ -101,6 +101,7 @@ def parse_flags(flags_file):
                 custom_flag_data = custom_flag.group(2)
                 file_custom_flags = re.split("\s+(?=-)", custom_flag_data)
                 custom_flags[relative_file_path] = file_custom_flags
+                continue
 
             custom_definition = re.match("# Custom defines: (.*)_DEFINES = (.*)", line)
             if custom_definition:
@@ -108,26 +109,26 @@ def parse_flags(flags_file):
                 custom_definition_data = custom_definition.group(2)
                 file_custom_definitions = re.split(";", custom_definition_data)
                 custom_definitions[relative_file_path] = file_custom_definitions
-            continue
+                continue
         # 获取带comment的行， 并去除行尾的注释
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
             line = re.split("\s+\#", line)[0]
 
-        lst = re.split(r"\s+=\s+", line)
+        lst = re.split(r"\s+=\s*", line)
         if lst[0] == flags_set[0]:
             data[0] = lst[1]
         elif lst[0] == flags_set[1]:
             data[1] = lst[1]
     final_flags = []
-    if data[0] and data[1]:
+    if data[0] is not None and data[1] is not None:
         for flag in data:
             flags = re.split("\s+(?=-)", flag)
             final_flags.append(flags)
-    elif data[0]:
+    elif data[1] is None:
         flags = re.split("\s+(?=-)", data[0])
         final_flags = [flags,]
-    elif data[1]:
+    elif data[0] is None:
         flags = re.split("\s+(?=-)", data[1])
         final_flags = [flags,]
     return final_flags, custom_flags, custom_definitions
