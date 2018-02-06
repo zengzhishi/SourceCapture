@@ -11,7 +11,6 @@
 
 import os
 import sys
-import time
 import re
 import conf.parse_logger as parse_logger
 import source_detective as source_detective
@@ -136,19 +135,27 @@ class CommandExec(building_process.ProcessBuilder):
 
             p = subprocess.Popen(cmd, shell=True, \
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            # 可能会导致管道阻塞
+            """
             retval = p.wait()
-            for line in p.stdout.readlines():
-               sys.stdout.write(line)
+            sys.stdout.write("------ " + file + " --------\n" + p.stdout.read())
 
             if retval == 0:
                 self._logger.info("compile: %s success" % file)
-                p = subprocess.Popen("ls result/* | wc -l", shell=True, \
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                p.wait()
-                line = p.stdout.read()
-                self._logger.debug("%s success, files count: %s" % (file, line))
             else:
                 self._logger.warning("compile: %s fail" % file)
+            """
+            # 推荐做法
+            out, err = p.communicate()
+            if out:
+                sys.stdout.write("------ " + file + " --------\n" + out)
+            else:
+                sys.stdout.write("------ " + file + " --------\n")
+
+            if p.returncode != 0:
+                self._logger.warning("compile: %s fail" % file)
+            else:
+                self._logger.info("compile: %s success" % file)
 
             lock.acquire()
         lock.release()

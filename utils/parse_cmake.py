@@ -71,7 +71,17 @@ def set_analysis(fin):
 
         for arg in args_result:
             if temp_key in config:
-                config[temp_key].append(strip_quotation(arg))
+                arg = strip_quotation(arg)
+                check_equal = re.match("(.*)=(.*)", arg)
+                if check_equal:
+                    key = check_equal.group(1)
+                    value = check_equal.group(2)
+                    if re.match("[\"\'](.*)[\"\']", value):
+                        value = value.replace("\"", "\\\"")
+                    else:
+                        value = "\"" + value + "\""
+                    arg = key + "=" + value
+                config[temp_key].append(arg)
             else:
                 config[temp_key] = []
     return config

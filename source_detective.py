@@ -215,6 +215,7 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
                 for include in data_dict["includes"]:
                     include_set.add(include)
                 data_dict["exec_directory"] = exec_path
+                data_dict["config_from"] = present_path
             yield info_list
 
         for file_name in os.listdir(present_path):
