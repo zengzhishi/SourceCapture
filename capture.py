@@ -32,6 +32,17 @@ except ImportError:
 DEFAULT_LOG_CONFIG_FILE = "conf/logging.conf"
 DEFAULT_COMPILE_COMMAND = "gcc"
 
+COMPILER_COMMAND_MAP = {
+    "GNU": {
+        "CXX": "g++",
+        "C": "gcc"
+    },
+    "Clang": {
+        "CXX": "clang++",
+        "C": "clang"
+    }
+}
+
 
 # 并发构建编译命令
 class CommandBuilder(building_process.ProcessBuilder):
@@ -453,17 +464,13 @@ class CaptureBuilder(object):
         json.dump(source_infos, fout, indent=4)
         return source_infos, include_files, files_count
 
-    def command_prebuild(self, source_infos, files_count):
+    def command_prebuild(self, source_infos, files_count, compiler_id="GNU"):
         # if len(source_infos) > 100 and files_count > 5000:
             # 只有任务比较多的时候，构建才需要并行化
         command_builder = CommandBuilder(self._logger)
         command_builder.distribute_jobs(source_infos)
         # setting
-        compiler_command_map = {
-            "CXX": "g++",
-            "C": "gcc"
-        }
-        command_builder.basic_setting(compiler_command_map, self.__output_path)
+        command_builder.basic_setting(COMPILER_COMMAND_MAP[compiler_id], self.__output_path)
         command_builder.redis_setting()
         result_list = command_builder.run()
         fout = open("result.json", "w")
@@ -483,13 +490,14 @@ class CaptureBuilder(object):
 
 def get_system_compiler_path(compiler_type):
     """获取系统自带的编译器路径"""
+    a = 10
     pass
 
 
 def parse_prefer_str(prefer_str, input_path):
     if prefer_str == "":
         prefers = []
-    if prefer_str == "all":
+    elif prefer_str == "all":
         prefers = source_detective.get_directions(input_path)
     else:
         prefers = prefer_str.strip(' \n\t').split(",")
@@ -503,6 +511,7 @@ def main():
     prefers_str = ""
     make_type = "cmake"
     cmake_build_path = ""
+    compiler_id = None
     if len(sys.argv) == 2:
         input_path = sys.argv[1]
     elif len(sys.argv) == 3:
@@ -524,11 +533,20 @@ def main():
         output_path = sys.argv[3]
         make_type = sys.argv[4]
         cmake_build_path = sys.argv[5]
+    elif len(sys.argv) == 7:
+        input_path = sys.argv[1]
+        prefers_str = sys.argv[2]
+        output_path = sys.argv[3]
+        make_type = sys.argv[4]
+        cmake_build_path = sys.argv[5]
+        compiler_id = sys.argv[6]
     else:
         sys.stderr.write(
     """Please input project root path to compiler.
     Usage:
-        python program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path]
+        python program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path] [build_type] [build_path] [compiler_id]
+        
+    compiler_id = ["GNU", "Clang"]
 """)
         sys.exit(-1)
 
@@ -554,6 +572,10 @@ def main():
     source_infos, include_files, files_count = capture_builder.scan_project()
 
     # 暂时不编译违背cmake 定义的源文件
+    if compiler_id:
+        if compiler_id not in COMPILER_COMMAND_MAP:
+            sys.stderr.write("No such compiler_id!")
+        capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
     capture_builder.command_prebuild(source_infos[:-2], files_count)
 
 
