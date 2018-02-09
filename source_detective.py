@@ -55,14 +55,18 @@ def get_directions(path):
 
 
 # cmake project
-def check_cmake(path):
+def check_cmake(path, project_path, cmake_build_path):
     """
     检查是否有CMakeList.txt
     :param path:
     :return:        bool
     """
     #check CMakeList.txt is exist
-    if os.path.exists(path + "/CMakeLists.txt"):
+    if not cmake_build_path:
+        cmake_build_path = project_path
+    present_build_path = get_relative_build_path(path, project_path, cmake_build_path)
+    if os.path.exists(path + "/CMakeLists.txt") \
+            and os.path.exists(present_build_path + "/CMakeFiles"):
         return True
     return False
 
@@ -111,6 +115,11 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
     cmake_files_path = present_build_path + "/CMakeFiles"
     info_list = []
 
+    def _get_abs_path(path):
+        if path[0] == "/":
+            return path
+        return os.path.abspath(final_build_path + "/" + path)
+
     for file_name in os.listdir(cmake_files_path):
         file_path = cmake_files_path + "/" + file_name
         if os.path.isdir(file_path) and check_cmake_exec_dest_dirname(file_name):
@@ -118,17 +127,36 @@ def get_cmake_info(present_path, project_path, cmake_build_path=None):
             flags_file = file_path + "/flags.make"
             depend_file = file_path + "/DependInfo.cmake"
             if os.path.exists(flags_file) and os.path.exists(depend_file):
-                depend_s_files, definitions, includes, compiler_type \
-                    = parse_cmake.parse_cmakeInfo(depend_file)
-                flags = parse_cmake.parse_flags(flags_file)
-                includes = map(lambda relative_path: os.path.abspath(final_build_path + "/" + relative_path), includes)
-                info_list.append({
-                    "source_files": depend_s_files,
-                    "flags": flags,
-                    "definitions": definitions,
-                    "includes": includes,
-                    "compiler_type": compiler_type
-                })
+                cmake_infos = parse_cmake.parse_cmakeInfo(depend_file)
+                origin_flags, origin_custom_flags, origin_custom_definitions = parse_cmake.parse_flags(flags_file)
+                for [depend_files, definitions, includes, compiler_type], flags in zip(cmake_infos, origin_flags):
+                    includes = map(lambda relative_path: _get_abs_path(relative_path), includes)
+                    custom_flags = {}
+                    custom_definitions = {}
+                    depend_s_files = filter(lambda file: file[-2:] != ".o", depend_files)
+                    for key in origin_custom_flags:
+                        abs_file_path = final_build_path + os.path.sep + key
+                        if abs_file_path in depend_files:
+                            index = depend_files.index(abs_file_path)
+                            source_file_path = depend_files[index - 1]
+                            index = depend_s_files.index(source_file_path)
+                            custom_flags[index] = origin_custom_flags[key]
+                    for key in origin_custom_definitions:
+                        abs_file_path = final_build_path + os.path.sep + key
+                        if abs_file_path in depend_files:
+                            index = depend_files.index(abs_file_path)
+                            source_file_path = depend_files[index - 1]
+                            index = depend_s_files.index(source_file_path)
+                            custom_definitions[index] = origin_custom_definitions[key]
+                    info_list.append({
+                        "source_files": depend_s_files,
+                        "flags": flags,
+                        "definitions": definitions,
+                        "includes": includes,
+                        "compiler_type": compiler_type,
+                        "custom_flags": custom_flags,
+                        "custom_definitions": custom_definitions
+                    })
 
     # 对于有定义CMakeLists.txt文件，但是没有配置编译选项的情况
     if len(info_list) == 0:
@@ -173,7 +201,8 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
     other_file_s = []
     while not to_walks.empty():
         present_path = to_walks.get()
-        if check_cmake(present_path):
+        if check_cmake(present_path, root_path, cmake_build_path):
+            print "\tscan path:" + present_path
             info_list = get_cmake_info(present_path, root_path, cmake_build_path)
             if cmake_build_path:
                 exec_path = cmake_build_path
@@ -186,6 +215,7 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
                 for include in data_dict["includes"]:
                     include_set.add(include)
                 data_dict["exec_directory"] = exec_path
+                data_dict["config_from"] = present_path
             yield info_list
 
         for file_name in os.listdir(present_path):
@@ -252,6 +282,7 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         "exec_directory": root_path,
         "compiler_type": "CXX"
     }
+    # TODO：对于未定义的源文件，需要返回记录，但是不需要构建编译命令
     for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
         for info in info_list:
             if len(info["source_files"]) == 0:
@@ -298,7 +329,7 @@ def get_definitions(path):
     return definitions
 
 
-def selective_walk(root_path, prefers):
+def autotools_project_walk(root_path, prefers):
     """目录遍历迭代器，遍历项目并获取对应的宏定义"""
     to_walks = Queue.Queue()
 
@@ -356,7 +387,7 @@ def get_present_path_autotools(root_path, prefers):
     """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
-    source_file_suffix = set("cpp, c, cc")
+    source_file_suffix = set("cpp, c, cc, cxx")
     include_file_suffix = set("h, hpp")
 
     root_path_length = len(root_path)
@@ -364,7 +395,7 @@ def get_present_path_autotools(root_path, prefers):
     files_s_defs = []
     files_s = []
     files_h = []
-    for line_tulpe in selective_walk(root_path, prefers):
+    for line_tulpe in autotools_project_walk(root_path, prefers):
         folder = line_tulpe[0]
         file_names = line_tulpe[1]
         definition = line_tulpe[2]
@@ -380,5 +411,67 @@ def get_present_path_autotools(root_path, prefers):
                 elif suffix in include_file_suffix:
                     files_h.append(folder + "/" + file_name)
     return paths, files_s, files_h, files_s_defs
+
+
+def selective_walk(root_path, prefers):
+    to_walks = Queue.Queue()
+
+    to_walks.put(root_path)
+
+    prefer_paths = set()
+    for name in prefers:
+        file_path = root_path + "/" + name
+        prefer_paths.add(file_path)
+
+    level = 0
+    while not to_walks.empty():
+        present_path = to_walks.get()
+
+        files = []
+        for file_name in os.listdir(present_path):
+            file_path = present_path + "/" + file_name
+            if os.path.isdir(file_path):
+                if not level:
+                    if file_path in prefer_paths:
+                        to_walks.put(file_path)
+                else:
+                    if file_name[0] != '.':                         # 排除了隐藏文件
+                        to_walks.put(file_path)
+            else:
+                files.append(file_name)
+        level = 1
+        yield (present_path, files)
+
+
+# GNU make project
+def get_present_path_make(root_path, prefers):
+    """
+    :param root_path:               根路径
+    :param prefers:                 关注目录
+    :return:
+    """
+    if len(prefers) == 0:
+        prefers = ["src", "include", "lib", "modules"]
+
+    source_file_suffix = set("cpp, c, cc, cxx")
+    include_file_suffix = set("h, hpp")
+    paths = []
+    files_s = []
+    files_h = []
+    for line_tulpe in selective_walk(root_path):
+        folder = line_tulpe[0]
+        file_paths = line_tulpe[1]
+        paths.append(folder)
+        for file_path in file_paths:
+            slice = file_path.split('.')
+            suffix = slice[-1]
+            if len(slice) > 1:
+                print "="*20 + suffix
+                if suffix in source_file_suffix:
+                    files_s.append(folder + "/" + file_path)
+                elif suffix in include_file_suffix:
+                    files_h.append(folder + "/" + file_path)
+    return paths, files_s, files_h
+
 
 
