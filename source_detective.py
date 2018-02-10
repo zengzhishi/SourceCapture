@@ -27,6 +27,7 @@ except ImportError:
     import redis
 
 import utils.parse_cmake as parse_cmake
+import utils.parse_make as parse_make
 
 def get_system_path():
     """
@@ -413,6 +414,7 @@ def get_present_path_autotools(root_path, prefers):
     return paths, files_s, files_h, files_s_defs
 
 
+# GNU make project
 def selective_walk(root_path, prefers):
     to_walks = Queue.Queue()
 
@@ -443,8 +445,7 @@ def selective_walk(root_path, prefers):
         yield (present_path, files)
 
 
-# GNU make project
-def get_present_path_make(root_path, prefers):
+def get_present_path_make(logger, root_path, prefers, build_path=None, output_path=None):
     """
     :param root_path:               根路径
     :param prefers:                 关注目录
@@ -458,7 +459,7 @@ def get_present_path_make(root_path, prefers):
     paths = []
     files_s = []
     files_h = []
-    for line_tulpe in selective_walk(root_path):
+    for line_tulpe in selective_walk(root_path, prefers):
         folder = line_tulpe[0]
         file_paths = line_tulpe[1]
         paths.append(folder)
@@ -471,7 +472,26 @@ def get_present_path_make(root_path, prefers):
                     files_s.append(folder + "/" + file_path)
                 elif suffix in include_file_suffix:
                     files_h.append(folder + "/" + file_path)
-    return paths, files_s, files_h
+
+    if not build_path:
+        build_path = root_path
+    if not output_path:
+        try:
+            import tempfile
+            output = tempfile.TemporaryFile()
+        except ImportError:
+            output_path_file = "/tmp/make_infos.txt"
+            output = open(output_path_file, "w + b")
+    else:
+        output = open(output_path + "/make_infos.txt", "w + b")
+
+    output = parse_make.create_command_infos(logger, build_path, output)
+    output.seek(0)
+    line_count, skip_count, compile_db = parse_make.parse_flags(logger, output, build_path)
+    output.close()
+    logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" % \
+                (line_count, skip_count))
+    return paths, files_s, files_h, compile_db
 
 
 

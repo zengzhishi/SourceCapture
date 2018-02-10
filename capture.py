@@ -19,6 +19,7 @@ import subprocess
 
 import hashlib
 import json
+import copy
 
 # 需要改为绝对路径
 try:
@@ -402,60 +403,74 @@ class CaptureBuilder(object):
                 self.__build_path = self.__root_path + "/build"
             source_infos, include_files, files_count = \
                source_detective.get_present_path_cmake(self.__root_path, self.__prefers, self.__build_path)
-        elif self.__build_type == "make":   # TODO: 添加普通项目的Makefile解析
-            sub_paths, files_s, files_h, files_s_defs = \
-                source_detective.get_present_path_autotools(self.__root_path, self.__prefers)
-            gcc_string = "gcc"
+        elif self.__build_type == "make":
+            # TODO: make 项目构建，只要生成了Makefile就能使用的方法(只针对编译，不针对链接以及其他工作)
+            # scan project files
+            sub_paths, files_s, files_h, compile_db = \
+                source_detective.get_present_path_make(self._logger, self.__root_path,
+                                                       self.__prefers, self.__build_path,
+                                                       self.__output_path)
 
-            # is_has_configure = os.path.exists(self.__root_path + "/configure")
-            # if is_has_configure:
-            gcc_string += " -DHAVE_CONFIG_H"
+            include_files = files_h
+            files_count = len(files_s)
+            source_infos = []
+            # get make prebuild command
+            for command_info in compile_db:
+                source_file = command_info["file"]
+                flags = command_info["arguments"]
 
-            gcc_include_string = ""
-            for path in sub_paths:
-                gcc_include_string = gcc_include_string + " " + "-I" + path
+                # exclude prebuilded source files from project total sources
+                try:
+                    files_s.remove(source_file)
+                except ValueError:
+                    self._logger.warning("file: %s not found, project scan error!" % (source_file))
 
-            source_files = [x[0] for x in files_s]
-            commands = []
-            with open(self.__output_path + "/" + "my_compile.sh", "w+") as fout:
-                for source_file_tuple, definition in zip(files_s, files_s_defs):
-                    source_file = source_file_tuple[0]
-                    suffix = source_file.split(".")[-1]
-                    index = -(len(suffix))
-                    file_name = source_file.split("/")[-1]
-                    file_index = -(len(file_name) + 1)
-                    output_path_str = self.__output_path
-                    if not output_path_str:
-                        output_path_str = source_file[:file_index]
-                    else:
-                        # 设置输出目录
-                        output_path_str = output_path_str + "/fileCache"
-                        if not os.path.exists(output_path_str):
-                            os.makedirs(output_path_str)
-                    output_file_path = output_path_str + "/" + source_file_tuple[1] + "_" + file_name[:index] + "o"
-                    makestring = gcc_string + definition + " -c " + source_file + " -o " + output_file_path + gcc_include_string
-                    fout.write(makestring + "\n")
-                    commands.append(makestring)
-            commands_dump(self.__output_path + "/compile_commands.json",
-                          source_files,
-                          commands,
-                          [self.__output_path for i in source_files]
-                        )
-            return [], [], []
+                includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
+                final_includes = map(lambda flag: flag[2:] if flag[2] == ' ' else flag[3:], includes)
 
-            pass
+                definitions = filter(lambda flag: True if flag[:2] == "-D" else False, flags)
+                final_definitions = map(lambda flag: flag[2:] if flag[2] == ' ' else flag[3:], definitions)
+
+                final_flags = filter(lambda flag: True if flag[:2] != "-I" and flag[:2] != "-D" else False, flags)
+
+                file_infos = {
+                    "source_files": [source_file,],
+                    "definitions": list(final_definitions),
+                    "includes": list(final_includes),
+                    "flags": list(final_flags),
+                    "exec_directory": command_info["directory"],
+                    "compiler_type": command_info["compiler"],
+                    # 考虑是否可以不加，没必要
+                    "custom_flags": [],
+                    "custom_definitions": [],
+                    "config_from": []
+                }
+                source_infos.append(file_infos)
+
+            # use sub_paths to build up globle includes, and get system includes
+            # build up command for left source files
+            global_includes = map(lambda path: os.path.abspath(path), sub_paths)
+            c_files = filter(lambda file_name: True if file_name[-2:] == ".c" else False, files_s)
+            cpp_files = filter(lambda file_name: True if file_name[-2:] != ".c" else False, files_s)
+            c_file_infos = {
+                "source_files": c_files,
+                "includes": list(global_includes),
+                "definitions": [],
+                "flags": ["-g", "fPIC"],
+                "exec_directory": self.__build_path if self.__build_path else self.__root_path,
+                "compiler_type": "C",
+                "custom_flags": [],
+                "custom_definitions": [],
+                "config_from": []
+            }
+            cxx_file_infos = copy.deepcopy(c_file_infos)
+            cxx_file_infos["source_files"] = cpp_files
+            cxx_file_infos["compiler_type"] = "CXX"
+            # TODO: 这里可能需要从其他那里获取
+            cxx_file_infos["flags"].append("std=c++14")
+            source_infos.append(c_file_infos)
+            source_infos.append(cxx_file_infos)
         else:   # 连Makefile都没有，直接构建
-            """
-            TODO: 扫描用Makefile直接构建的项目
-                1. 先获取所有的源文件, 头文件
-                2. 根据源文件去获取对应的目标文件是怎产生的,
-                    (1) make -d -n -k, 其中-n是为不实际执行make, 然后将输出的文本进行检索,构建出所依赖的变量
-                    (2) 写入伪目标到Makefile中, 伪目标的操作主要是打印我们需要的参数值
-                    (3) 获取返回值, 解析这些返回值
-                3. 根据截获的参数构建出源文件的编译命令
-            """
-            paths, files_s, files_h = \
-                source_detective.get_present_path_make(self.__root_path, self.__prefers)
             pass
         self._logger.info("End of Scaning project folders...")
 

@@ -22,7 +22,7 @@ DEFAULT_MAKEFILE_NAME = [
 
 
 # 使用 make -qp 获取执行的编译命令， 在修改Makefile 执行伪目标获取参数的方法
-def create_data_base_infos(root_path, output_path, makefile_name="Makefile", make_args=None):
+def create_data_base_infos(root_path, output, makefile_name="Makefile", make_args=None):
     """
     创建info文件
     :param root_path:
@@ -44,9 +44,8 @@ def create_data_base_infos(root_path, output_path, makefile_name="Makefile", mak
     p = subprocess.Popen(cmd, shell=True, \
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
-    fileout = open(output_path + "/make_info.txt", "w")
-    fileout.writelines(out)
-    fileout.close()
+    output.writelines(out)
+    return output
 
 
 def block_read(fin):
@@ -240,6 +239,7 @@ def unbalanced_quotes(s):
     return (single % 2 == 1 or double % 2 == 1)
 
 
+# TODO: 需要处理一下 -c -o，最终的flags不需要这些, 文件名也不需要加入到flags中
 def parse_flags(logger, build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     skip_count = 0
