@@ -426,10 +426,10 @@ class CaptureBuilder(object):
                     self._logger.warning("file: %s not found, project scan error!" % (source_file))
 
                 includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
-                final_includes = map(lambda flag: flag[2:] if flag[2] == ' ' else flag[3:], includes)
+                final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
 
                 definitions = filter(lambda flag: True if flag[:2] == "-D" else False, flags)
-                final_definitions = map(lambda flag: flag[2:] if flag[2] == ' ' else flag[3:], definitions)
+                final_definitions = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], definitions)
 
                 final_flags = filter(lambda flag: True if flag[:2] != "-I" and flag[:2] != "-D" else False, flags)
 

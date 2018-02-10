@@ -183,8 +183,8 @@ def exec_makefile(new_makefile, field_name):
 
 
 # 使用 make -Bnkw 方式获取编译命令的方法
-def create_command_infos(logger, build_path, output_path, makefile_name=None,
-                 make_args=None):
+def create_command_infos(logger, build_path, output, makefile_name=None,
+                 make_args=""):
     make_file = makefile_name
     is_exist = False
     if not makefile_name:
@@ -209,9 +209,8 @@ def create_command_infos(logger, build_path, output_path, makefile_name=None,
     p = subprocess.Popen(cmd, shell=True, \
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
-    fileout = open(output_path + "/make_info.txt", "w")
-    fileout.writelines(out)
-    fileout.close()
+    output.writelines(out)
+    return output
 
 
 def split_cmd_line(line):
@@ -326,6 +325,9 @@ def parse_flags(logger, build_log_in, build_dir,
         line_count += 1
 
         for (i, word) in enumerate(words):
+            if word == "-c":
+                continue
+
             if (file_regex.match(word)):
                 filepath = word
 
@@ -358,7 +360,7 @@ def parse_flags(logger, build_log_in, build_dir,
 
         # add entry to database
         logger.info("args={} --> {}".format(len(arguments), filepath))
-        arguments.append(filepath)
+        # arguments.append(filepath)
         # TODO performance: serialize to json file here?
         compile_db.append({
             'directory': working_dir,

@@ -467,7 +467,6 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
             slice = file_path.split('.')
             suffix = slice[-1]
             if len(slice) > 1:
-                print "="*20 + suffix
                 if suffix in source_file_suffix:
                     files_s.append(folder + "/" + file_path)
                 elif suffix in include_file_suffix:
