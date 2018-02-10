@@ -16,11 +16,15 @@ CMake项目基本能扫描完整
 8. 整理新的项目扫描统计的输出格式
 9. cmake的命令执行过程中可能会出现自动生成的源文件，这部分要如何处理，需要调研一下(example: blender项目) **doing**
 10. 项目执行入口需要完善，main.sh
-11. automake项目的方案解决 **doing**
-12. Makefile直接构建项目的解决 **delay**
+11. ~~automake项目的方案解决 **doing**~~
+12. ~~Makefile直接构建项目的解决 **delay**~~
 13. 数据导出模块需要修改一下
 14. automake项目的输出结果如何与cmake，makefile项目兼容，需要设计一下
+15. automake项目和Makefile项目统一做成make -Bnkw的方式， cmake可以暂时保留这种方式
+16. 另外扫描目录的逻辑需要保留并与make -Bnkw的进行结合
+17. ~~gcc命令解析需要重新完善一下~~
 
 ### 依赖模块
-这里依赖了[redis](https://pypi.python.org/pypi/redis/2.10.6)模块，如果有该模块的则可以直接使用，否则需要去git clone https://github.com/andymccurdy/redis-py 项目下来，并将redis目录放到utils目录下，这样项目就能引入该模块来使用 \
+* 这里依赖了[redis](https://pypi.python.org/pypi/redis/2.10.6)模块，如果有该模块的则可以直接使用，否则需要去git clone https://github.com/andymccurdy/redis-py 项目下来，并将redis目录放到utils目录下，这样项目就能引入该模块来使用 \
 之所以这么麻烦是当心之后可能需要对redis client进行精简
+* make -Bnkw的方式获取的命令解析参考了[compiledb-generator](https://github.com/nickdiego/compiledb-generator)

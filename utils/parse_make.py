@@ -14,7 +14,15 @@ import re
 import subprocess
 
 
-def create_infos(root_path, output_path, makefile_name="Makefile", make_args=None):
+DEFAULT_MAKEFILE_NAME = [
+    "Makefile",
+    "makefile",
+    "GNUMakefile"
+]
+
+
+# 使用 make -qp 获取执行的编译命令， 在修改Makefile 执行伪目标获取参数的方法
+def create_data_base_infos(root_path, output_path, makefile_name="Makefile", make_args=None):
     """
     创建info文件
     :param root_path:
@@ -174,5 +182,191 @@ def exec_makefile(new_makefile, field_name):
     """
     pass
 
+
+# 使用 make -Bnkw 方式获取编译命令的方法
+def create_command_infos(logger, build_path, output_path, makefile_name=None,
+                 make_args=None):
+    make_file = makefile_name
+    is_exist = False
+    if not makefile_name:
+        for makefile_name in DEFAULT_MAKEFILE_NAME:
+            make_file = build_path + os.path.sep + makefile_name
+            if os.path.exists(make_file):
+                is_exist = True
+                break
+        if not is_exist:
+            raise IOError("No Makefile in " + build_path)
+    else:
+        make_file = build_path + os.path.sep + makefile_name
+        if not os.path.exists(make_file):
+            raise IOError("No Makefile in " + build_path)
+
+    if is_exist:
+        cmd = "cd {}; make -Bnkw {}".format(build_path, make_args)
+    else:
+        cmd = "cd {}; make -Bnkw -f {} {}".format(build_path, make_file, make_args)
+
+    logger.info("execute command: " + cmd)
+    p = subprocess.Popen(cmd, shell=True, \
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, err = p.communicate()
+    fileout = open(output_path + "/make_info.txt", "w")
+    fileout.writelines(out)
+    fileout.close()
+
+
+def split_cmd_line(line):
+    # Pass 1: split line using whitespace
+    words = line.strip().split()
+    # Pass 2: merge words so that the no. of quotes is balanced
+    res = []
+    for w in words:
+        # TODO:这里能处理变量里面有空格的情况, 参考使用到cmake的解析中
+        if(len(res) > 0 and unbalanced_quotes(res[-1])):
+            res[-1] += " " + w
+        else:
+            res.append(w)
+    return res
+
+
+def unbalanced_quotes(s):
+    single = 0
+    double = 0
+    for c in s:
+        if(c == "'"):
+            single += 1
+        elif(c == '"'):
+            double += 1
+    return (single % 2 == 1 or double % 2 == 1)
+
+
+def parse_flags(logger, build_log_in, build_dir,
+                other_cc_compiles=None, other_cxx_compiles=None):
+    skip_count = 0
+    # Setting compiler regex string
+    cc_re_compile_str = "(.*-?g?cc )|(.*-?clang )"
+    if other_cc_compiles:
+        for cc_compile in other_cc_compiles:
+            cc_re_compile_str += "|(.*-?" + cc_compile + ' )'
+    cxx_re_compile_str = "(.*-?[gc]\+\+ )|(.*-?clang\+\+ )"
+    if other_cxx_compiles:
+        for cxx_compile in other_cxx_compiles:
+            # Maybe have some problem
+            if cxx_compile[-2:] == "++":
+                cxx_compile.replace('++', '\\+\\+')
+            cxx_re_compile_str += "|(.*-?" + cxx_compile + ' )'
+    cc_compile_regex = re.compile(cc_re_compile_str)
+    cpp_compile_regex = re.compile(cxx_re_compile_str)
+
+    # Leverage make --print-directory option
+    make_enter_dir = re.compile("^\s*make\[\d+\]: Entering directory [`\'\"](?P<dir>.*)[`\'\"]\s*$")
+    make_leave_dir = re.compile("^\s*make\[\d+\]: Leaving directory .*$")
+
+    # Flags we want:
+    # TODO: We can add more falgs patten
+    # -includes (-i, -I)
+    # -warnings (-Werror), but no assembler, etc. flags (-Wa,-option)
+    # -language (-std=gnu99) and standard library (-nostdlib)
+    # -defines (-D)
+    # -m32 -m64
+    # -g
+    flags_whitelist = [
+        "-c",
+        "-g",
+        "-m.+",
+        "-W[^,]*",
+        "-[iIDF].*",
+        "-std=[a-z0-9+]+",
+        "-(no)?std(lib|inc)",
+        "-D([a-zA-Z0-9_]+)=(.*)"
+    ]
+    flags_whitelist = re.compile("|".join(map("^{}$".format, flags_whitelist)))
+
+    # Used to only bundle filenames with applicable arguments
+    filename_flags = ["-o", "-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
+    invalid_include_regex = re.compile("(^.*out/.+_intermediates.*$)|(.+/proguard.flags$)")
+
+    file_regex = re.compile("(^.+\.c$)|(^.+\.cc$)|(^.+\.cpp$)|(^.+\.cxx$)")
+
+    compile_db = []
+    line_count = 0
+
+    dir_stack = [build_dir]
+    working_dir = build_dir
+
+    # Process build log
+    for line in build_log_in:
+        # Concatenate line if need
+        accumulate_line = line
+        while (line.endswith('\\\n')):
+            accumulate_line = accumulate_line[:-2]
+            line = next(build_log_in, '')
+            accumulate_line += line
+        line = accumulate_line
+
+        # Parse directory that make entering/leaving
+        enter_dir = make_enter_dir.match(line)
+        if (make_enter_dir.match(line)):
+            working_dir = enter_dir.group('dir')
+            dir_stack.append(working_dir)
+        elif (make_leave_dir.match(line)):
+            dir_stack.pop()
+            working_dir = dir_stack[-1]
+
+        if (cc_compile_regex.match(line)):
+            compiler = 'C'
+        elif (cpp_compile_regex.match(line)):
+            compiler = 'CXX'
+        else:
+            continue
+
+        arguments = []
+        words = split_cmd_line(line)[1:]
+        filepath = None
+        line_count += 1
+
+        for (i, word) in enumerate(words):
+            if (file_regex.match(word)):
+                filepath = word
+
+            if(word[0] != '-' or not flags_whitelist.match(word)):
+                # phony target
+                continue
+
+            # include arguments for this option, if there are any, as a tuple
+            if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
+                w = words[i + 1]
+                # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
+                p = os.path.abspath(w)
+                if not invalid_include_regex.match(p):
+                    arguments.extend([word, p])
+            else:
+                if word.startswith("-I"):
+                    opt = word[0:2]
+                    val = word[2:]
+                    # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
+                    p = os.path.abspath(val)
+                    if not invalid_include_regex.match(p):
+                        arguments.append(opt + p)
+                else:
+                    arguments.append(word)
+
+        if filepath is None:
+            logger.warning("Empty file name. Ignoring: {}".format(line))
+            skip_count += 1
+            continue
+
+        # add entry to database
+        logger.info("args={} --> {}".format(len(arguments), filepath))
+        arguments.append(filepath)
+        # TODO performance: serialize to json file here?
+        compile_db.append({
+            'directory': working_dir,
+            'file': filepath,
+            'arguments': arguments,
+            'compiler': compiler
+        })
+
+    return (line_count, skip_count, compile_db)
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
