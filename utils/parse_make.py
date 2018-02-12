@@ -238,6 +238,15 @@ def unbalanced_quotes(s):
     return (single % 2 == 1 or double % 2 == 1)
 
 
+def strip_quotes(s):
+    if s[0] == "'" and s[-1] == "'":
+        return s[1:-1]
+    elif s[0] == '"' and s[-1] == '"':
+        return s[1:-1]
+    else:
+        return s
+
+
 # TODO: 需要处理一下 -c -o，最终的flags不需要这些, 文件名也不需要加入到flags中
 def parse_flags(logger, build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
@@ -333,21 +342,55 @@ def parse_flags(logger, build_log_in, build_dir,
 
             if(word[0] != '-' or not flags_whitelist.match(word)):
                 # phony target
+                word_strip_quotes = strip_quotes(word)
+                if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
+                    # transfer equal value to double quotes
+                    quetos_words = split_cmd_line(word_strip_quotes)
+                    if len(quetos_words) > 1:
+                        for (i, quetos_word) in enumerate(quetos_words):
+                            if quetos_word[i] in filename_flags and quetos_word[1][0] != '-':
+                                w = quetos_words[i + 1]
+                                p = os.path.abspath(build_dir + os.path.sep + w)
+                                if not invalid_include_regex.match(p):
+                                    if quetos_word == "-I":
+                                        arguments.append(quetos_word + p)
+                                    else:
+                                        arguments.append("{} {}".format(quetos_word, p))
+                    else:
+                        if word_strip_quotes.startswith("-I"):
+                            opt = word[0:2]
+                            val = word[2:]
+                            p = os.path.abspath(build_dir + os.path.sep + val)
+                            if not invalid_include_regex.match(p):
+                                arguments.append(opt + p)
+                        elif word_strip_quotes.startswith("-D"):
+                            definition_with_value = re.compile("^-D([a-zA-Z0-9_]+)=(.*)$")
+                            definition_with_value_match = definition_with_value.match(word_strip_quotes)
+                            if definition_with_value_match:
+                                key = definition_with_value_match.group(1)
+                                value = definition_with_value_match.group(2)
+                                value = "'{}'".format(value)
+                                word_strip_quotes = "-D{}={}".format(key, value)
+                            arguments.append(word_strip_quotes)
                 continue
 
             # include arguments for this option, if there are any, as a tuple
             if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                p = os.path.abspath(w)
+                p = os.path.abspath(build_dir + os.path.sep + w)
                 if not invalid_include_regex.match(p):
                     arguments.extend([word, p])
+                    if word == "-I":
+                        arguments.append(word + p)
+                    else:
+                        arguments.append("{} {}".format(word, p))
             else:
                 if word.startswith("-I"):
                     opt = word[0:2]
                     val = word[2:]
                     # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
-                    p = os.path.abspath(val)
+                    p = os.path.abspath(build_dir + os.path.sep + val)
                     if not invalid_include_regex.match(p):
                         arguments.append(opt + p)
                 else:

@@ -450,13 +450,13 @@ class CaptureBuilder(object):
             # use sub_paths to build up globle includes, and get system includes
             # build up command for left source files
             global_includes = map(lambda path: os.path.abspath(path), sub_paths)
-            c_files = filter(lambda file_name: True if file_name[-2:] == ".c" else False, files_s)
-            cpp_files = filter(lambda file_name: True if file_name[-2:] != ".c" else False, files_s)
+            c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
+            cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
             c_file_infos = {
                 "source_files": c_files,
                 "includes": list(global_includes),
                 "definitions": [],
-                "flags": ["-g", "fPIC"],
+                "flags": ["-g", "-fPIC"],
                 "exec_directory": self.__build_path if self.__build_path else self.__root_path,
                 "compiler_type": "C",
                 "custom_flags": [],
@@ -467,11 +467,43 @@ class CaptureBuilder(object):
             cxx_file_infos["source_files"] = cpp_files
             cxx_file_infos["compiler_type"] = "CXX"
             # TODO: 这里可能需要从其他那里获取
-            cxx_file_infos["flags"].append("std=c++14")
+            cxx_file_infos["flags"].append("-std=c++14")
             source_infos.append(c_file_infos)
             source_infos.append(cxx_file_infos)
+
         else:   # 连Makefile都没有，直接构建
-            pass
+            sub_paths, files_s, files_h = source_detective.get_present_path(self.__root_path, self.__prefers)
+            include_files = files_h
+            files_count = len(files_s)
+            global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
+            global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
+            global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+            c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
+            cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
+
+            is_has_configure = os.path.exists(self.__root_path + "/configure")
+            definitions = []
+            if is_has_configure:
+                definitions.append("HAVE_CONFIG_H")
+            c_file_infos = {
+                "source_files": c_files,
+                "includes": list(global_includes),
+                "definitions": definitions,
+                "flags": ["-g", "-fPIC"],
+                "exec_directory": self.__build_path if self.__build_path else self.__root_path,
+                "compiler_type": "C",
+                "custom_flags": [],
+                "custom_definitions": [],
+                "config_from": []
+            }
+            cxx_file_infos = copy.deepcopy(c_file_infos)
+            cxx_file_infos["source_files"] = cpp_files
+            cxx_file_infos["compiler_type"] = "CXX"
+            # TODO: 这里可能需要从其他那里获取
+            cxx_file_infos["flags"].append("-std=c++14")
+            source_infos.append(c_file_infos)
+            source_infos.append(cxx_file_infos)
+
         self._logger.info("End of Scaning project folders...")
 
         # Test
@@ -585,13 +617,17 @@ def main():
     capture_builder = CaptureBuilder(logger, input_path, output_path, \
                                      prefers=prefers, build_type=make_type, build_path=cmake_build_path)
     source_infos, include_files, files_count = capture_builder.scan_project()
+    logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # 暂时不编译违背cmake 定义的源文件
-    if compiler_id:
-        if compiler_id not in COMPILER_COMMAND_MAP:
-            sys.stderr.write("No such compiler_id!")
-        capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
-    capture_builder.command_prebuild(source_infos[:-2], files_count)
+    if make_type not in ["cmake", "make"]:
+        if compiler_id:
+            if compiler_id not in COMPILER_COMMAND_MAP:
+                sys.stderr.write("No such compiler_id!")
+            capture_builder.command_prebuild(source_infos, files_count, compiler_id)
+        capture_builder.command_prebuild(source_infos, files_count)
+    else:
+        capture_builder.command_prebuild(source_infos[:-2], files_count)
 
 
 if __name__ == "__main__":

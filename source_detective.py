@@ -388,8 +388,8 @@ def get_present_path_autotools(root_path, prefers):
     """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
-    source_file_suffix = set("cpp, c, cc, cxx")
-    include_file_suffix = set("h, hpp")
+    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
+    include_file_suffix = set(["h", "hpp"])
 
     root_path_length = len(root_path)
     paths = []
@@ -454,8 +454,8 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
-    source_file_suffix = set("cpp, c, cc, cxx")
-    include_file_suffix = set("h, hpp")
+    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
+    include_file_suffix = set(["h", "hpp"])
     paths = []
     files_s = []
     files_h = []
@@ -493,4 +493,27 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
     return paths, files_s, files_h, compile_db
 
 
+def get_present_path(root_path, prefers):
+    if len(prefers) == 0:
+        prefers = ["src", "include", "lib", "modules"]
 
+    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
+    include_file_suffix = set(["h", "hpp"])
+    paths = []
+    files_s = []
+    files_h = []
+    for line_tulpe in selective_walk(root_path, prefers):
+        folder = line_tulpe[0]
+        file_paths = line_tulpe[1]
+        paths.append(folder)
+        for file_path in file_paths:
+            slice = file_path.split('.')
+            suffix = slice[-1]
+            if len(slice) > 1:
+                if suffix in source_file_suffix:
+                    files_s.append(folder + "/" + file_path)
+                elif suffix in include_file_suffix:
+                    files_h.append(folder + "/" + file_path)
+    print files_s
+
+    return paths, files_s, files_h
