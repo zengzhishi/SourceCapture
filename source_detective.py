@@ -445,7 +445,7 @@ def selective_walk(root_path, prefers):
         yield (present_path, files)
 
 
-def get_present_path_make(logger, root_path, prefers, build_path=None, output_path=None):
+def get_present_path_make(logger, root_path, prefers, build_path=None, output_path=None, build_args=None):
     """
     :param root_path:               根路径
     :param prefers:                 关注目录
@@ -484,7 +484,10 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
     else:
         output = open(output_path + "/make_infos.txt", "w + b")
 
-    output = parse_make.create_command_infos(logger, build_path, output)
+    if build_args:
+        output = parse_make.create_command_infos(logger, build_path, output, make_args=build_args)
+    else:
+        output = parse_make.create_command_infos(logger, build_path, output)
     output.seek(0)
     line_count, skip_count, compile_db = parse_make.parse_flags(logger, output, build_path)
     output.close()

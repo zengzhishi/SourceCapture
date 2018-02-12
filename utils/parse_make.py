@@ -350,7 +350,10 @@ def parse_flags(logger, build_log_in, build_dir,
                         for (i, quetos_word) in enumerate(quetos_words):
                             if quetos_word[i] in filename_flags and quetos_word[1][0] != '-':
                                 w = quetos_words[i + 1]
-                                p = os.path.abspath(build_dir + os.path.sep + w)
+                                if w[0] == '/':
+                                    p = w
+                                else:
+                                    p = os.path.abspath(working_dir + os.path.sep + w)
                                 if not invalid_include_regex.match(p):
                                     if quetos_word == "-I":
                                         arguments.append(quetos_word + p)
@@ -360,7 +363,10 @@ def parse_flags(logger, build_log_in, build_dir,
                         if word_strip_quotes.startswith("-I"):
                             opt = word[0:2]
                             val = word[2:]
-                            p = os.path.abspath(build_dir + os.path.sep + val)
+                            if val[0] == '/':
+                                p = val
+                            else:
+                                p = os.path.abspath(working_dir + os.path.sep + val)
                             if not invalid_include_regex.match(p):
                                 arguments.append(opt + p)
                         elif word_strip_quotes.startswith("-D"):
@@ -378,7 +384,10 @@ def parse_flags(logger, build_log_in, build_dir,
             if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                p = os.path.abspath(build_dir + os.path.sep + w)
+                if w[0] == '/':
+                    p = w
+                else:
+                    p = os.path.abspath(working_dir + os.path.sep + w)
                 if not invalid_include_regex.match(p):
                     arguments.extend([word, p])
                     if word == "-I":
@@ -390,7 +399,10 @@ def parse_flags(logger, build_log_in, build_dir,
                     opt = word[0:2]
                     val = word[2:]
                     # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
-                    p = os.path.abspath(build_dir + os.path.sep + val)
+                    if val[0] == '/':
+                        p = val
+                    else:
+                        p = os.path.abspath(working_dir + os.path.sep + val)
                     if not invalid_include_regex.match(p):
                         arguments.append(opt + p)
                 else:

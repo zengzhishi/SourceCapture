@@ -627,6 +627,10 @@ def main():
             capture_builder.command_prebuild(source_infos, files_count, compiler_id)
         capture_builder.command_prebuild(source_infos, files_count)
     else:
+        if compiler_id:
+            if compiler_id not in COMPILER_COMMAND_MAP:
+                sys.stderr.write("No such compiler_id!")
+            capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
         capture_builder.command_prebuild(source_infos[:-2], files_count)
 
 
