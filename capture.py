@@ -32,6 +32,8 @@ except ImportError:
 
 # 基本配置项
 DEFAULT_CONFIG_FILE = "conf/capture.cfg"
+DEFAULT_COMPILER_ID = "GNU"
+DEFAULT_BUILDING_TYPE = "make"
 
 
 def load_compiler(config, compiler_map):
@@ -325,14 +327,15 @@ class CaptureBuilder(object):
     def __init__(self, logger, \
                  root_path,
                  output_path=None,
-                 build_type="cmake",
+                 build_type=DEFAULT_BUILDING_TYPE,
                  build_path=None,
-                 prefers = [],
-                 compiler_type=DEFAULT_COMPILE_COMMAND, \
-                 compiler_path=None):
-        self.__prefers = prefers
+                 prefers=None,
+                 compiler_id=None):
+        if prefers:
+            self.__prefers = prefers
+        else:
+            self.__prefers = []
         self.__root_path = os.path.abspath(root_path)
-        self.compiler_type = compiler_type
         self.__build_type = build_type
         self.__build_path = build_path
         self._logger = logger
@@ -342,11 +345,11 @@ class CaptureBuilder(object):
         else:
             self.__output_path = self.__root_path
 
-        # 设置编译器
-        if compiler_path:
-            self.compiler_path = compiler_path
+        if compiler_id is None:
+            self.__compiler_id = compiler_id
         else:
-            self.compiler_path = get_system_compiler_path(compiler_type)
+            self.__compiler_id = DEFAULT_COMPILER_ID
+
 
     def add_prefer_folder(self, folder):
         self.__prefers.append(folder)
@@ -491,13 +494,13 @@ class CaptureBuilder(object):
         scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
         return source_infos, include_files, files_count
 
-    def command_prebuild(self, source_infos, files_count, compiler_id="GNU"):
+    def command_prebuild(self, source_infos, files_count):
         # if len(source_infos) > 100 and files_count > 5000:
             # 只有任务比较多的时候，构建才需要并行化
         command_builder = CommandBuilder(self._logger)
         command_builder.distribute_jobs(source_infos)
         # setting
-        command_builder.basic_setting(COMPILER_COMMAND_MAP[compiler_id], self.__output_path)
+        command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id], self.__output_path)
         command_builder.redis_setting()
         result_list = command_builder.run()
 
@@ -514,12 +517,6 @@ class CaptureBuilder(object):
         command_exec.distribute_jobs(output_list)
         command_exec.run()
         return
-
-
-def get_system_compiler_path(compiler_type):
-    """获取系统自带的编译器路径"""
-    a = 10
-    pass
 
 
 def parse_prefer_str(prefer_str, input_path):
@@ -594,25 +591,21 @@ def main():
     prefers = parse_prefer_str(prefers_str, input_path)
     logger.info("prefer directories: %s" % str(prefers))
 
+    if compiler_id not in COMPILER_COMMAND_MAP:
+        sys.stderr.write("No such compiler_id!")
+        compiler_id = None
+
     # CaptureBuilder
-    capture_builder = CaptureBuilder(logger, input_path, output_path, \
+    capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
                                      prefers=prefers, build_type=make_type, build_path=cmake_build_path)
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
-    # 暂时不编译违背cmake 定义的源文件
-    if make_type not in ["cmake", "make"]:
-        if compiler_id:
-            if compiler_id not in COMPILER_COMMAND_MAP:
-                sys.stderr.write("No such compiler_id!")
-            result = capture_builder.command_prebuild(source_infos, files_count, compiler_id)
-        result = capture_builder.command_prebuild(source_infos, files_count)
-    else:
-        if compiler_id:
-            if compiler_id not in COMPILER_COMMAND_MAP:
-                sys.stderr.write("No such compiler_id!")
-            result = capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
+    # 暂时不编译cmake和Makefile未定义的源文件
+    if make_type in ["cmake", "make"]:
         result = capture_builder.command_prebuild(source_infos[:-2], files_count)
+    else:
+        result = capture_builder.command_prebuild(source_infos, files_count)
     capture_builder.command_exec(result)
 
 
