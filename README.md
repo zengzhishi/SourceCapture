@@ -19,7 +19,7 @@ CMake项目基本能扫描完整
 11. ~~automake项目的方案解决 **close**~~
 12. ~~Makefile直接构建项目的解决 **delay**~~
 13. 数据导出模块需要修改一下 **doing**
-14. automake项目的输出结果如何与cmake，makefile项目兼容，需要设计一下
+14. ~~automake项目的输出结果如何与cmake，makefile项目兼容，需要设计一下~~
 15. ~~automake项目和Makefile项目统一做成make -Bnkw的方式， cmake可以暂时保留这种方式~~
 16. ~~另外扫描目录的逻辑需要保留并与make -Bnkw的进行结合~~
 17. ~~gcc命令解析需要重新完善一下~~

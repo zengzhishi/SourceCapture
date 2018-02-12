@@ -16,6 +16,7 @@ import conf.parse_logger as parse_logger
 import source_detective as source_detective
 import building_process
 import subprocess
+import ConfigParser
 
 import hashlib
 import json
@@ -30,19 +31,26 @@ except ImportError:
 
 
 # 基本配置项
-DEFAULT_LOG_CONFIG_FILE = "conf/logging.conf"
-DEFAULT_COMPILE_COMMAND = "gcc"
+DEFAULT_CONFIG_FILE = "conf/capture.cfg"
 
-COMPILER_COMMAND_MAP = {
-    "GNU": {
-        "CXX": "g++",
-        "C": "gcc"
-    },
-    "Clang": {
-        "CXX": "clang++",
-        "C": "clang"
-    }
-}
+
+def load_compiler(config, compiler_map):
+    compiler_ids = config.get("Compiler", "compiler_id").split(",")
+    c_compilers = config.get("Compiler", "c_compiler").split(",")
+    cxx_compilers = config.get("Compiler", "cxx_compiler").split(",")
+    for compiler_id, c_compiler, cxx_compiler in zip(compiler_ids, c_compilers, cxx_compilers):
+        compiler_map[compiler_id] = {
+            "CXX": cxx_compiler,
+            "C": c_compiler
+        }
+    return compiler_map, compiler_map[compiler_ids[0]]["CXX"]
+
+
+COMPILER_COMMAND_MAP = {}
+config = ConfigParser.ConfigParser()
+config.read(DEFAULT_CONFIG_FILE)
+DEFAULT_LOG_CONFIG_FILE = config.get("Default", "logging_config")
+COMPILER_COMMAND_MAP, DEFAULT_COMPILE_COMMAND = load_compiler(config, COMPILER_COMMAND_MAP)
 
 
 # 并发构建编译命令
@@ -159,10 +167,11 @@ class CommandExec(building_process.ProcessBuilder):
             """
             # 推荐做法
             out, err = p.communicate()
-            if out:
-                sys.stdout.write("------ " + file + " --------\n" + out)
-            else:
-                sys.stdout.write("------ " + file + " --------\n")
+            sys.stdout.write(" CC Building {}\n{}".format(file, out))
+            # if out:
+            #     sys.stdout.write(" CC Building {}\n{}".format(file, out))
+            # else:
+            #     sys.stdout.write("------ " + file + " --------\n")
 
             if p.returncode != 0:
                 self._logger.warning("compile: %s fail" % file)
@@ -262,80 +271,52 @@ def get_file_info(redis_instance, transfer_name):
     return seria_data
 
 
-def commands_dump(output_path, source_files, commands, working_paths):
+def commands_dump(output_path, compile_commands):
     """导出生成的编译命令
     Args:
-        output_path:        输出路径
-        source_files:       源文件
-        commands:           编译命令
-        working_paths:      命令执行路径
+        output_path:            输出路径
+        compile_commands:       最终生成的compile_commands.json文件所需要的数据
     """
-    json_body = []
-    for output_tuple in zip(source_files, commands, working_paths):
-        json_data = {
-                "directory": output_tuple[2],
-                "command": output_tuple[1],
-                "file": output_tuple[0]
-                }
-        json_body.append(json_data)
     with open(output_path, 'w') as fout:
-        json.dump(json_body, fout, indent=4)
+        json.dump(compile_commands, fout, indent=4)
     return
 
 
-def dict_command_dump(output_path, result_dict, output_script=True):
-    """利用最终返回的结果字典，导出生成的编译命令"""
-    json_body = []
-    index = len(output_path.split("/")[-1]) + 1
-    script_output_path = output_path[:-index]
-    if output_script:
-        fout = open(script_output_path + "/compile.sh", "w")
-    while len(result_dict):
-        key, output_tuple = result_dict.popitem()
-        json_data = {
-                "directory": output_tuple[2],
-                "command": output_tuple[1],
-                "file": output_tuple[0]
-                }
-        json_body.append(json_data)
-        if output_script:
-            fout.write(output_tuple[1] + "\n")
-
-    if output_script:
-        fout.close()
-
-    with open(output_path, 'w') as fout:
-        json.dump(json_body, fout, indent=4)
-    return
-
-
-def scan_data_dump(output_path, source_files, macros, include_files, \
-        include_paths, is_has_config=False):
-    """导出目录扫描数据
-    Args:
-        output_path:        输出路径
-        source_files:       源文件
-        macros:             宏定义(与源文件一一对应)
-        include_files:      头文件
-        include_paths:      系统头文件搜索路径
-        is_has_config:      是否含有configure
+def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=False):
     """
-    if is_has_config:
-        map_macros = map(lambda macro: macro + " -DHAVE_CONFIG_H", macros)
-    else:
-        map_macros = macros
+    导出目录扫描数据,可能需要导出到redis中
+    :param output_path:             输出路径
+    :param scan_data:               项目扫描数据
+    :param compile_commands:
+    :param saving_to_db:            是否需要保存到redis
+    :return:
+    """
 
-    json_data = {
-            "source_files": source_files,
-            "macros": map_macros,
-            "source_count": len(source_files),
-            "include_files": include_files,
-            "include_count": len(include_files),
-            "include_paths": include_paths
+    if saving_to_db:
+        pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
+        redis_instance = redis.Redis(connection_pool=pool)
+        for parse in scan_data:
+            compiler_confs = {
+                "includes": parse["includes"],
+                "definitions": parse["definitions"],
+                "compiler_type": parse["compiler_type"],
+                "config_from": parse["config_from"],
+                "exec_directory": parse["exec_directory"],
+                "flags": parse["flags"]
             }
+            for i, file in enumerate(parse["source_files"]):
+                custom_flags = parse[i]
+                custom_definitions = parse[i]
+                custom_confs = copy.deepcopy(compiler_confs)
+                custom_confs["definitions"].extend(custom_definitions)
+                custom_confs["flags"].extend(custom_flags)
+                custom_confs["file"] = file
+                saving_json_line = json.dumps(custom_confs)
+                # TODO：这里是错误的做法，应该是hash之后的文件名作为key
+                redis_instance.set(file, saving_json_line)
 
     with open(output_path, 'w') as fout:
-        json.dump(json_data, fout, indent=4)
+        json.dump(scan_data, fout, indent=4)
     return
 
 
@@ -476,8 +457,8 @@ class CaptureBuilder(object):
             include_files = files_h
             files_count = len(files_s)
             global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
-            global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
-            global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+            #global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
+            #global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
             c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
             cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
 
@@ -506,9 +487,8 @@ class CaptureBuilder(object):
 
         self._logger.info("End of Scaning project folders...")
 
-        # Test
-        fout = open("test.out", "w")
-        json.dump(source_infos, fout, indent=4)
+        # dumping data
+        scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
         return source_infos, include_files, files_count
 
     def command_prebuild(self, source_infos, files_count, compiler_id="GNU"):
@@ -520,13 +500,14 @@ class CaptureBuilder(object):
         command_builder.basic_setting(COMPILER_COMMAND_MAP[compiler_id], self.__output_path)
         command_builder.redis_setting()
         result_list = command_builder.run()
-        fout = open("result.json", "w")
+
         output_list = []
         while len(result_list):
             json_ob = result_list.pop()
             output_list.append(json_ob)
-        json.dump(output_list, fout, indent=4)
-        self.command_exec(output_list)
+
+        commands_dump(self.__output_path + "/compile_commands.json", output_list)
+        return output_list
 
     def command_exec(self, output_list):
         command_exec = CommandExec(self._logger)
@@ -624,14 +605,15 @@ def main():
         if compiler_id:
             if compiler_id not in COMPILER_COMMAND_MAP:
                 sys.stderr.write("No such compiler_id!")
-            capture_builder.command_prebuild(source_infos, files_count, compiler_id)
-        capture_builder.command_prebuild(source_infos, files_count)
+            result = capture_builder.command_prebuild(source_infos, files_count, compiler_id)
+        result = capture_builder.command_prebuild(source_infos, files_count)
     else:
         if compiler_id:
             if compiler_id not in COMPILER_COMMAND_MAP:
                 sys.stderr.write("No such compiler_id!")
-            capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
-        capture_builder.command_prebuild(source_infos[:-2], files_count)
+            result = capture_builder.command_prebuild(source_infos[:-2], files_count, compiler_id)
+        result = capture_builder.command_prebuild(source_infos[:-2], files_count)
+    capture_builder.command_exec(result)
 
 
 if __name__ == "__main__":
