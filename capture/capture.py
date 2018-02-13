@@ -13,7 +13,7 @@ import os
 import sys
 import re
 import conf.parse_logger as parse_logger
-import source_detective as source_detective
+import source_detective
 import building_process
 import subprocess
 import ConfigParser
