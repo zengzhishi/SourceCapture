@@ -35,13 +35,17 @@ Usage
 
 使用capture.py作为入口（main.sh 暂时用不了），使用时先保证目标扫描项目已经配置完成::
 
-    python capture.py ${project_root_path} ${prefers} ${result_output_path} ${build_type} ${build_path} ${compiler_id}
+    python capture.py ${project_root_path} ${result_output_path}
 
 其中
 
 * project_root_path 项目根目录
-* prefers 关注目录，以逗号分割 [ all 代表全部目录扫描 ]
 * result_output_path 输出目录
-* build_type 构建方式（cmake， make， scons[暂未完成]），其中使用 autotools 构建的，并未做单独处理，请生成了Makefile之后使用make
-* build_path 执行构建命令的目录
-* compiler_id 编译器类型（目前支持GNU GCC 和 Clang） GNU GCC请输入GNU， Clang请输入Clang
+
+其他还有更加详细的使用请使用::
+
+    python capture.py -h
+    或
+    python capture.py --help
+
+来查看
