@@ -11,7 +11,10 @@
 
 import os
 import sys
+import argparse
+
 import re
+import copy
 import conf.parse_logger as parse_logger
 import source_detective
 import building_process
@@ -20,7 +23,6 @@ import ConfigParser
 
 import hashlib
 import json
-import copy
 
 # 需要改为绝对路径
 try:
@@ -324,7 +326,7 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
 
 class CaptureBuilder(object):
     """主要的编译构建脚本生成类"""
-    def __init__(self, logger, \
+    def __init__(self, logger,
                  root_path,
                  output_path=None,
                  build_type=DEFAULT_BUILDING_TYPE,
@@ -531,49 +533,41 @@ def parse_prefer_str(prefer_str, input_path):
 
 def main():
     """主要逻辑"""
-    # TODO: 使用比较简洁一点的参数输入方式
-    output_path = ""
-    prefers_str = ""
-    make_type = "cmake"
-    cmake_build_path = ""
-    compiler_id = None
-    if len(sys.argv) == 2:
-        input_path = sys.argv[1]
-    elif len(sys.argv) == 3:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-    elif len(sys.argv) == 4:
-        # 增加了输出目录
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-    elif len(sys.argv) == 5:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-    elif len(sys.argv) == 6:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-        cmake_build_path = sys.argv[5]
-    elif len(sys.argv) == 7:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-        cmake_build_path = sys.argv[5]
-        compiler_id = sys.argv[6]
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("project_root_path", nargs="?",
+                        help="The project root path you want to analyze.")
+    parser.add_argument("result_output_path", nargs="?",
+                        help="The project analysis result output path.")
+
+    parser.add_argument("-p", "--prefers", default="all", nargs="*",
+                        help="The prefer directories you want to scan from project. (default: %(default)s)")
+
+    parser.add_argument("-t", "--build_type",
+                        # action="store_const",
+                        # const="make",
+                        nargs="?",
+                        choices=["make", "cmake", "scons"],
+                        default="make",
+                        help="The building type of project you choose.")
+
+    parser.add_argument("-b", "--build_path",
+                        help="The outer project building path.")
+
+    parser.add_argument("-c", "--compiler_id", default="GNU", nargs="?",
+                        choices=["GNU", "Clang"],
+                        help="The command will use which compiler.")
+
+    args = vars(parser.parse_args())
+    print args
+    input_path = args["project_root_path"]
+    output_path = args["result_output_path"]
+    build_type = args["build_type"]
+    compiler_id = args["compiler_id"]
+    prefers = args["prefers"]
+    if "build_path" not in args:
+        build_path = input_path
     else:
-        sys.stderr.write(
-    """Please input project root path to compiler.
-    Usage:
-        python program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path] [build_type] [build_path] [compiler_id]
-        
-    compiler_id = ["GNU", "Clang"]
-""")
-        sys.exit(-1)
+        build_path = args["build_path"]
 
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
@@ -582,13 +576,9 @@ def main():
     config_file = DEFAULT_LOG_CONFIG_FILE
     logger = parse_logger.getLogger(config_file, new_output="capture.log")
 
-    # command_output_path = input_path
-    # if output_path:
-    #     command_output_path = output_path
-    #     logger.info("output_path is None, set output path: %s" % input_path)
-
     # 获取关注目录
-    prefers = parse_prefer_str(prefers_str, input_path)
+    if "all" in prefers:
+        prefers = parse_prefer_str("all", input_path)
     logger.info("prefer directories: %s" % str(prefers))
 
     if compiler_id not in COMPILER_COMMAND_MAP:
@@ -597,12 +587,12 @@ def main():
 
     # CaptureBuilder
     capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
-                                     prefers=prefers, build_type=make_type, build_path=cmake_build_path)
+                                     prefers=prefers, build_type=build_type, build_path=build_path)
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # 暂时不编译cmake和Makefile未定义的源文件
-    if make_type in ["cmake", "make"]:
+    if build_type in ["cmake", "make"]:
         result = capture_builder.command_prebuild(source_infos[:-2], files_count)
     else:
         result = capture_builder.command_prebuild(source_infos, files_count)
