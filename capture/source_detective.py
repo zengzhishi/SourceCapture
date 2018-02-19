@@ -1,40 +1,22 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
-#################################################################################################
-#  TODO: 修改之后的思路
-#  1. 改变目录搜索获取参数的方式，针对与可以使用cmake的目录，可以采用更加方便的方式，
-#  通过获取每个含有CMakeList.txt目录下的flags.make，可以获得编译参数，头文件引用路径，和宏定义
-#  需要做的工作只是获取这些，同时返回有哪些头文件和源文件即可，遍历上不需要将所有自路径都添加进来
-#   (done)
-#  2. 针对使用automake工具的项目，还需要研究一下
-#  3. 针对直接使用Makefile的，可以通过添加一个伪目标，利用@echo来输出需要使用到的FLAGS参数，
-#  但是由于命名和写法的不一致，可能需要做整个依赖关系的解析，得到最终需要使用到的flag参数对应的
-#  变量
-#
-#################################################################################################
-
-import re
 import os
-import sys
 import subprocess
 import Queue
-
-try:
-    import redis
-except ImportError:
-    sys.path.append("./utils")
-    import redis
 
 import utils.parse_cmake as parse_cmake
 import utils.parse_make as parse_make
 
-def get_system_path():
+
+def get_system_path(compiler):
     """
     获取gcc系统头文件路径
     """
-    cmd = """echo 'main(){}' | gcc -E -x c -v -"""                              # 查询 c 系统头文件路径
-    cpp_cmd = """echo 'main(){}' | gcc -E -x c++ -v -"""                        # 查询 c++ 系统头文件路径
+    # 查询 c 系统头文件路径
+    cmd = "echo 'main(){}' | " + compiler + " -E -x c -v -"
+    # 查询 c++ 系统头文件路径
+    cpp_cmd = """echo 'main(){}' | gcc -E -x c++ -v -"""
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     retval = p.wait()
     lines = []
