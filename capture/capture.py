@@ -12,17 +12,18 @@
 import os
 import sys
 import argparse
-
 import re
 import copy
+import subprocess
+import ConfigParser
+import hashlib
+import json
+
 import conf.parse_logger as parse_logger
 import source_detective
 import building_process
-import subprocess
-import ConfigParser
+import build_filter
 
-import hashlib
-import json
 
 # 需要改为绝对路径
 try:
@@ -62,9 +63,10 @@ class CommandBuilder(building_process.ProcessBuilder):
     def redis_setting(self, host="localhost", port=6379, db=0):
         self.redis_pool = redis.ConnectionPool(host=host, port=port, db=db)
 
-    def basic_setting(self, compile_command, output_path):
+    def basic_setting(self, compile_command, output_path, generate_bitcode):
         self.compile_command = compile_command
         self.output_path = output_path
+        self.generate_bitcode = generate_bitcode
 
     def mission(self, queue, result, locks=[]):
         lock = locks[0]
@@ -124,13 +126,19 @@ class CommandBuilder(building_process.ProcessBuilder):
                 output_command += args_string
                 output_command += custom_args_string
                 output_command += "-c " + src + " "
-                output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
 
                 json_dict = {
                     "directory": directory,
                     "file": src,
-                    "command": output_command
                 }
+
+                if self.generate_bitcode:
+                    output_bitcode_command = output_command + "-emit-llvm "
+                    output_bitcode_command += "-o " + self.output_path + "/" + transfer_name + ".bc "
+                    json_dict["bitcode_command"] = output_bitcode_command
+                output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
+
+                json_dict["command"] = output_command
                 result.append(json_dict)
 
             lock.acquire()
@@ -297,7 +305,7 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
     """
 
     if saving_to_db:
-        pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
+        pool = redis.ConnectionPool(host='localhost', port=6379, db=1)
         redis_instance = redis.Redis(connection_pool=pool)
         for parse in scan_data:
             compiler_confs = {
@@ -347,7 +355,7 @@ class CaptureBuilder(object):
         else:
             self.__output_path = self.__root_path
 
-        if compiler_id is None:
+        if compiler_id is not None:
             self.__compiler_id = compiler_id
         else:
             self.__compiler_id = DEFAULT_COMPILER_ID
@@ -496,25 +504,43 @@ class CaptureBuilder(object):
         scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
         return source_infos, include_files, files_count
 
-    def command_prebuild(self, source_infos, files_count):
+    def command_prebuild(self, source_infos, generate_bitcode, files_count):
         # if len(source_infos) > 100 and files_count > 5000:
             # 只有任务比较多的时候，构建才需要并行化
         command_builder = CommandBuilder(self._logger)
         command_builder.distribute_jobs(source_infos)
         # setting
-        command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id], self.__output_path)
+        command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id],
+                                      self.__output_path, generate_bitcode)
         command_builder.redis_setting()
         result_list = command_builder.run()
 
         output_list = []
+        bitcode_output_list = []
         while len(result_list):
             json_ob = result_list.pop()
+            if "bitcode_command" in json_ob:
+                command = json_ob.pop("bitcode_command")
+                bc_json_ob = copy.deepcopy(json_ob)
+                bc_json_ob["command"] = command
+                bitcode_output_list.append(bc_json_ob)
             output_list.append(json_ob)
 
         commands_dump(self.__output_path + "/compile_commands.json", output_list)
-        return output_list
+        commands_dump(self.__output_path + "/compile_commands_bc.json", bitcode_output_list)
+        return output_list, bitcode_output_list
 
-    def command_exec(self, output_list):
+    def command_exec(self, compile_commands, bc_compile_commands, update_all=False):
+        commands = copy.deepcopy(compile_commands)
+        commands.extend(bc_compile_commands)
+        output_list = commands
+        self._logger.info("All compile_commands count: %d" % len(commands))
+        if not update_all:
+            build_filter_ins = build_filter.BuildFilter()
+            transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
+            output_list = build_filter_ins.filter_building_source(list(transfer_names), commands)
+
+        self._logger.info("Need to recompile commands count: %d" % len(output_list))
         command_exec = CommandExec(self._logger)
         command_exec.distribute_jobs(output_list)
         command_exec.run()
@@ -557,13 +583,16 @@ def main():
                         choices=["GNU", "Clang"],
                         help="The command will use which compiler.")
 
+    parser.add_argument("--generate_bitcode", action='store_true',
+                        help="Whether generate bitcode file.")
+
     args = vars(parser.parse_args())
-    print args
     input_path = args["project_root_path"]
     output_path = args["result_output_path"]
     build_type = args["build_type"]
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
+    generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
     if "build_path" not in args:
         build_path = input_path
     else:
@@ -574,7 +603,7 @@ def main():
 
     # TODO 可能需要添加为参数输入
     config_file = DEFAULT_LOG_CONFIG_FILE
-    logger = parse_logger.getLogger(config_file, new_output="capture.log")
+    logger = parse_logger.getLogger(config_file, new_output=output_path + "/capture.log")
 
     # 获取关注目录
     if "all" in prefers:
@@ -593,10 +622,12 @@ def main():
 
     # 暂时不编译cmake和Makefile未定义的源文件
     if build_type in ["cmake", "make"]:
-        result = capture_builder.command_prebuild(source_infos[:-2], files_count)
+        result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
-        result = capture_builder.command_prebuild(source_infos, files_count)
-    capture_builder.command_exec(result)
+        result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)
+
+    print("Start building object file and bc file")
+    capture_builder.command_exec(result, bc_result)
 
 
 if __name__ == "__main__":
