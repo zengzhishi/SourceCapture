@@ -4,9 +4,23 @@
 import os
 import subprocess
 import Queue
+import ConfigParser
 
 import utils.parse_cmake as parse_cmake
 import utils.parse_make as parse_make
+from capture import DEFAULT_CONFIG_FILE
+
+# suffix config loading
+config = ConfigParser.ConfigParser()
+config.read(DEFAULT_CONFIG_FILE)
+
+c_file_suffix_str = config.get("Default", "source_c_suffix")
+cxx_file_suffix_str = config.get("Default", "source_cxx_suffix")
+
+c_file_suffix = set(c_file_suffix_str.split(","))
+cxx_file_suffix = set(cxx_file_suffix_str.split(","))
+source_file_suffix = c_file_suffix | cxx_file_suffix
+include_file_suffix = set(config.get("Default", "include_suffix").split(","))
 
 
 def get_system_path(compiler):
@@ -166,8 +180,6 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
         对于没能在cmake中找到的源文件，则可以将includes继承所有，flags设置一些通用的就行，defs使用HAVE_CONFIG这种可以判断的
         最后一组则是对剩下的未配置源文件和头文件进行整理返回
     """
-    source_file_suffix = set(["cpp", "c", "cc", "cxx"])
-    include_file_suffix = set(["h", "hpp"])
     to_walks = Queue.Queue()
     to_walks.put(root_path)
     # 已经添加过的源文件，将记录下来，除了cmake指定要重复编译，否则不做特殊处理
@@ -250,10 +262,6 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         files_count
     """
     # TODO: 这些set可以写到globle中，没必要每个地方配置一个
-    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
-    c_file_suffix = set(["c"])
-    cxx_file_suffix = set(["cpp", "cxx", "cc", "c++"])
-    include_file_suffix = set(["h", "hpp"])
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
@@ -370,8 +378,6 @@ def get_present_path_autotools(root_path, prefers):
     """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
-    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
-    include_file_suffix = set(["h", "hpp"])
 
     root_path_length = len(root_path)
     paths = []
@@ -436,8 +442,6 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
-    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
-    include_file_suffix = set(["h", "hpp"])
     paths = []
     files_s = []
     files_h = []
@@ -482,8 +486,6 @@ def get_present_path(root_path, prefers):
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
-    source_file_suffix = set(["cpp", "c", "cc", "cxx", "c++"])
-    include_file_suffix = set(["h", "hpp"])
     paths = []
     files_s = []
     files_h = []
@@ -499,6 +501,5 @@ def get_present_path(root_path, prefers):
                     files_s.append(folder + "/" + file_path)
                 elif suffix in include_file_suffix:
                     files_h.append(folder + "/" + file_path)
-    print files_s
-
     return paths, files_s, files_h
+
