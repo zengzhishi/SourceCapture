@@ -11,7 +11,6 @@ reserved = {
 
 tokens = [
     'SHAPE',
-    'NOT',
     'AND',
     'OR',
     'MACROS',
@@ -22,14 +21,17 @@ tokens = [
     'LESS',
     'LARGER_AND_EQUAL',
     'LESS_AND_EQUAL',
+    'NOT_EQUAL',
     'EQUAL',
+    'COMMENT',
+    'INCLUDE_COMMENT',
+    'NOT',
 ]
 
 tokens += list(reserved.values())
 
 # Regular expression rules for simple tokens
 t_SHAPE = r'\#'
-t_NOT = r'\!'
 t_AND = r'&&'
 t_OR = r'\|\|'
 t_LPAREN = r'\('
@@ -38,7 +40,11 @@ t_LARGER = r">"
 t_LARGER_AND_EQUAL = r">="
 t_LESS = r'<'
 t_LESS_AND_EQUAL = r'<='
+t_NOT_EQUAL = r'\!='
 t_EQUAL = r'=='
+t_COMMENT = r'//.*'
+t_INCLUDE_COMMENT = r'/\*.*\*/'
+t_NOT = r'\!'
 
 
 def t_NUMBER(t):
