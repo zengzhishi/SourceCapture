@@ -411,13 +411,16 @@ class CaptureBuilder(object):
             # get make prebuild command
             for command_info in compile_db:
                 source_file = command_info["file"]
+                directory = command_info["directory"]
                 flags = command_info["arguments"]
+                if source_file[0] != '/':
+                    source_file = os.path.abspath(directory + os.path.sep + source_file)
 
                 # exclude prebuilded source files from project total sources
                 try:
                     files_s.remove(source_file)
                 except ValueError:
-                    self._logger.warning("file: %s not found, project scan error!" % (source_file))
+                    self._logger.warning("file: %s not found, is compiled multitimes or project scan error!" % (source_file))
 
                 includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
                 final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
@@ -535,10 +538,9 @@ class CaptureBuilder(object):
         commands.extend(bc_compile_commands)
         output_list = commands
         self._logger.info("All compile_commands count: %d" % len(commands))
-        if not update_all:
-            build_filter_ins = build_filter.BuildFilter()
-            transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
-            output_list = build_filter_ins.filter_building_source(list(transfer_names), commands)
+        build_filter_ins = build_filter.BuildFilter(self._logger)
+        transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
+        output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
 
         self._logger.info("Need to recompile commands count: %d" % len(output_list))
         command_exec = CommandExec(self._logger)
@@ -586,6 +588,9 @@ def main():
     parser.add_argument("--generate_bitcode", action='store_true',
                         help="Whether generate bitcode file.")
 
+    parser.add_argument("--update_all", action='store_true',
+                        help="Whether update all.")
+
     args = vars(parser.parse_args())
     input_path = args["project_root_path"]
     output_path = args["result_output_path"]
@@ -593,6 +598,7 @@ def main():
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
     generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
+    update_all = args["update_all"]
     if "build_path" not in args:
         build_path = input_path
     else:
@@ -627,7 +633,7 @@ def main():
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)
 
     print("Start building object file and bc file")
-    capture_builder.command_exec(result, bc_result)
+    capture_builder.command_exec(result, bc_result, update_all)
 
 
 if __name__ == "__main__":

@@ -24,13 +24,14 @@ class BuildFilter(object):
     """Check file update time, and filter file need to update"""
     default_time = time.time()
 
-    def __init__(self, host="localhost", port=6379, name_map_db=2, update_time_db=3):
+    def __init__(self, logger, host="localhost", port=6379, name_map_db=2, update_time_db=3):
         """
         :param host:
         :param port:
         :param name_map_db:                     redis database for file_name mapping
         :param update_time_db:                  redis database for saving file updated time
         """
+        self._logger = logger
         self._redis_filename = redis.Redis(host=host, port=port, db=name_map_db)
         self._redis_update_time = redis.Redis(host=host, port=port, db=update_time_db)
 
@@ -41,11 +42,17 @@ class BuildFilter(object):
     def check_update_time(self, file_code):
         """check file modify time"""
         file_path = self._redis_filename.get(file_code)
+        if not os.path.exists(file_path):
+            self._logger.warning("File: {} is not exist.".format(file_path))
+            return False
         mtime = os.path.getmtime(file_path)
         last_mtime = self.get_update_time(file_code)
         return True if mtime != last_mtime else False
 
     def set_update_time(self, file_code, file_path):
+        if not os.path.exists(file_path):
+            self._logger.warning("set File: {} update time fail.".format(file_path))
+            return
         mtime = os.path.getmtime(file_path)
         self._redis_update_time.set(file_code, mtime)
 
@@ -56,16 +63,21 @@ class BuildFilter(object):
             file_path = json_obj["file"]
             self._redis_filename.set(file_code, file_path)
 
-    def filter_building_source(self, file_codes, compile_commands):
+    def filter_building_source(self, file_codes, compile_commands, update_all=False):
         """
 
         :param file_codes:
         :param compile_commands:
+        :param update_all:
         :return:
             need_compile_commands:      compile_command in compile_commands needed to update
         """
         need_compile_commands = []
         files = []
+
+        if update_all:
+            self._redis_filename.flushall()
+            self._redis_update_time.flushall()
 
         if self._redis_filename.dbsize() != len(file_codes):
             self.update_file_mapping(file_codes, compile_commands)
@@ -81,6 +93,8 @@ class BuildFilter(object):
         for tuple in zip(file_codes, files):
             self.set_update_time(tuple[0], tuple[1])
 
+        self._redis_filename.save()
+        self._redis_update_time.save()
         return need_compile_commands
 
 
