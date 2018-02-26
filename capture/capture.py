@@ -473,8 +473,10 @@ class CaptureBuilder(object):
             include_files = files_h
             files_count = len(files_s)
             global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
-            #global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
-            #global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+
+            global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
+            global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+
             c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
             cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
 
