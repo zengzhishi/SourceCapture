@@ -409,12 +409,11 @@ def parse_flags(logger, build_log_in, build_dir,
             if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                if w[0] == '/':
+                if w[0] == '/' or words[i] == "-include":
                     p = w
                 else:
                     p = os.path.abspath(working_dir + os.path.sep + w)
                 if not invalid_include_regex.match(p):
-                    arguments.extend([word, p])
                     if word == "-I":
                         arguments.append(word + p)
                     else:

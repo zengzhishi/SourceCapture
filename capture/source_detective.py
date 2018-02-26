@@ -460,6 +460,7 @@ def get_present_path_make(logger, root_path, prefers, build_path=None, output_pa
 
     if not build_path:
         build_path = root_path
+
     if not output_path:
         try:
             import tempfile
