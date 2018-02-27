@@ -8,6 +8,7 @@ import ConfigParser
 
 import utils.parse_cmake as parse_cmake
 import utils.parse_make as parse_make
+import utils.parse_scons as parse_scons
 from capture import DEFAULT_CONFIG_FILE
 
 # suffix config loading
@@ -21,6 +22,8 @@ c_file_suffix = set(c_file_suffix_str.split(","))
 cxx_file_suffix = set(cxx_file_suffix_str.split(","))
 source_file_suffix = c_file_suffix | cxx_file_suffix
 include_file_suffix = set(config.get("Default", "include_suffix").split(","))
+
+VERBOSE_LIST = config.get("SCons", "verbose").split(',')
 
 
 def get_system_path(compiler):
@@ -504,3 +507,49 @@ def get_present_path(root_path, prefers):
                     files_h.append(folder + "/" + file_path)
     return paths, files_s, files_h
 
+
+# SCons project
+def get_present_path_scons(logger, root_path, prefers, build_path=None, output_path=None, build_args=None):
+    if len(prefers) == 0:
+        prefers = ["src", "include", "lib", "modules"]
+
+    paths = []
+    files_s = []
+    files_h = []
+    for line_tulpe in selective_walk(root_path, prefers):
+        folder = line_tulpe[0]
+        file_paths = line_tulpe[1]
+        paths.append(folder)
+        for file_path in file_paths:
+            slice = file_path.split('.')
+            suffix = slice[-1]
+            if len(slice) > 1:
+                if suffix in source_file_suffix:
+                    files_s.append(folder + "/" + file_path)
+                elif suffix in include_file_suffix:
+                    files_h.append(folder + "/" + file_path)
+
+    if not build_path:
+        build_path = root_path
+
+    if not output_path:
+        try:
+            import tempfile
+            output = tempfile.TemporaryFile()
+        except ImportError:
+            output_path_file = "/tmp/scons_infos.txt"
+            output = open(output_path_file, "w + b")
+    else:
+        output = open(output_path + "/msconsinfos.txt", "w + b")
+
+    if build_args:
+        output = parse_scons.create_command_infos(logger, build_path, output,
+                                                  VERBOSE_LIST, build_args=build_args)
+    else:
+        output = parse_scons.create_command_infos(logger, build_path, output, VERBOSE_LIST)
+    output.seek(0)
+    line_count, skip_count, compile_db = parse_scons.parse_flags(logger, output, build_path)
+    output.close()
+    logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" % \
+                (line_count, skip_count))
+    return paths, files_s, files_h, compile_db

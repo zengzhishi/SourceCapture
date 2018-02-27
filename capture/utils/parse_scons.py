@@ -49,8 +49,7 @@ def check_command_format(result, other_cc_compiles=None, other_cxx_compiles=None
     return False
 
 
-# 使用 make -Bnkw 方式获取编译命令的方法
-def create_command_infos(logger, build_path, output, verbose_list=[], build_args=""):
+def create_command_infos(logger, build_path, output, verbose_list, build_args=""):
     is_exist = False
 
     make_file = build_path + os.path.sep + DEFAULT_SCONSTRUCT_NAME
@@ -59,7 +58,10 @@ def create_command_infos(logger, build_path, output, verbose_list=[], build_args
     has_verbose = False
     outlines = []
     for verbose in verbose_list:
-        cmd = "cd {}; scons -n {} {}=1".format(build_path, build_args, verbose)
+        if verbose.find("="):
+            cmd = "cd {}; scons -n {} {}".format(build_path, build_args, verbose)
+        else:
+            cmd = "cd {}; scons -n {} {}=1".format(build_path, build_args, verbose)
         logger.info("try to execute command: " + cmd)
         print cmd
         p = subprocess.Popen(cmd, shell=True,

@@ -387,6 +387,71 @@ class CaptureBuilder(object):
         else:
             raise TypeError("object 'prefers' is not ListType")
 
+    def _tranfer_compile_db(self, sub_paths, files_s, files_h, compile_db):
+        include_files = files_h
+        files_count = len(files_s)
+        source_infos = []
+        # get make prebuild command
+        for command_info in compile_db:
+            source_file = command_info["file"]
+            directory = command_info["directory"]
+            flags = command_info["arguments"]
+            if source_file[0] != '/':
+                source_file = os.path.abspath(directory + os.path.sep + source_file)
+
+            # exclude prebuilded source files from project total sources
+            try:
+                files_s.remove(source_file)
+            except ValueError:
+                self._logger.warning("file: %s not found, is compiled multitimes or project scan error!" % (source_file))
+
+            includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
+            final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
+
+            definitions = filter(lambda flag: True if flag[:2] == "-D" else False, flags)
+            final_definitions = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], definitions)
+
+            final_flags = filter(lambda flag: True if flag[:2] != "-I" and flag[:2] != "-D" else False, flags)
+
+            file_infos = {
+                "source_files": [source_file,],
+                "definitions": list(final_definitions),
+                "includes": list(final_includes),
+                "flags": list(final_flags),
+                "exec_directory": command_info["directory"],
+                "compiler_type": command_info["compiler"],
+                # 考虑是否可以不加，没必要
+                "custom_flags": [],
+                "custom_definitions": [],
+                "config_from": []
+            }
+            source_infos.append(file_infos)
+
+        # use sub_paths to build up globle includes, and get system includes
+        # build up command for left source files
+        global_includes = map(lambda path: os.path.abspath(path), sub_paths)
+        c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
+        cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
+        c_file_infos = {
+            "source_files": c_files,
+            "includes": list(global_includes),
+            "definitions": [],
+            "flags": ["-g", "-fPIC"],
+            "exec_directory": self.__build_path if self.__build_path else self.__root_path,
+            "compiler_type": "C",
+            "custom_flags": [],
+            "custom_definitions": [],
+            "config_from": []
+        }
+        cxx_file_infos = copy.deepcopy(c_file_infos)
+        cxx_file_infos["source_files"] = cpp_files
+        cxx_file_infos["compiler_type"] = "CXX"
+        # TODO: 这里可能需要从其他那里获取
+        cxx_file_infos["flags"].append("-std=c++14")
+        source_infos.append(c_file_infos)
+        source_infos.append(cxx_file_infos)
+        return source_infos, include_files, files_count
+
     def scan_project(self):
         """
         扫描项目文件，获取项目统计信息，并保留扫描结果，用于构建编译命令
@@ -407,70 +472,23 @@ class CaptureBuilder(object):
                                                        self.__prefers, self.__build_path,
                                                        self.__output_path, build_args=self._extra_build_args)
 
-            include_files = files_h
-            files_count = len(files_s)
-            source_infos = []
-            # get make prebuild command
-            for command_info in compile_db:
-                source_file = command_info["file"]
-                directory = command_info["directory"]
-                flags = command_info["arguments"]
-                if source_file[0] != '/':
-                    source_file = os.path.abspath(directory + os.path.sep + source_file)
+            source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
+                                                                                files_s,
+                                                                                files_h,
+                                                                                compile_db)
 
-                # exclude prebuilded source files from project total sources
-                try:
-                    files_s.remove(source_file)
-                except ValueError:
-                    self._logger.warning("file: %s not found, is compiled multitimes or project scan error!" % (source_file))
+        elif self.__build_type == "scons":
+            sub_paths, files_s, files_h, compile_db = \
+                source_detective.get_present_path_scons(self._logger, self.__root_path,
+                                                       self.__prefers, self.__build_path,
+                                                       self.__output_path, build_args=self._extra_build_args)
 
-                includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
-                final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
+            source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
+                                                                                files_s,
+                                                                                files_h,
+                                                                                compile_db)
 
-                definitions = filter(lambda flag: True if flag[:2] == "-D" else False, flags)
-                final_definitions = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], definitions)
-
-                final_flags = filter(lambda flag: True if flag[:2] != "-I" and flag[:2] != "-D" else False, flags)
-
-                file_infos = {
-                    "source_files": [source_file,],
-                    "definitions": list(final_definitions),
-                    "includes": list(final_includes),
-                    "flags": list(final_flags),
-                    "exec_directory": command_info["directory"],
-                    "compiler_type": command_info["compiler"],
-                    # 考虑是否可以不加，没必要
-                    "custom_flags": [],
-                    "custom_definitions": [],
-                    "config_from": []
-                }
-                source_infos.append(file_infos)
-
-            # use sub_paths to build up globle includes, and get system includes
-            # build up command for left source files
-            global_includes = map(lambda path: os.path.abspath(path), sub_paths)
-            c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
-            cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
-            c_file_infos = {
-                "source_files": c_files,
-                "includes": list(global_includes),
-                "definitions": [],
-                "flags": ["-g", "-fPIC"],
-                "exec_directory": self.__build_path if self.__build_path else self.__root_path,
-                "compiler_type": "C",
-                "custom_flags": [],
-                "custom_definitions": [],
-                "config_from": []
-            }
-            cxx_file_infos = copy.deepcopy(c_file_infos)
-            cxx_file_infos["source_files"] = cpp_files
-            cxx_file_infos["compiler_type"] = "CXX"
-            # TODO: 这里可能需要从其他那里获取
-            cxx_file_infos["flags"].append("-std=c++14")
-            source_infos.append(c_file_infos)
-            source_infos.append(cxx_file_infos)
-
-        else:   # 连Makefile都没有，直接构建
+        else:   # 连构建脚本都没有，直接构建
             sub_paths, files_s, files_h = source_detective.get_present_path(self.__root_path, self.__prefers)
             include_files = files_h
             files_count = len(files_s)
