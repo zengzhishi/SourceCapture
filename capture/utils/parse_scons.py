@@ -21,7 +21,7 @@ def has_file_s(line):
     file_regex = re.compile("(^.+\.c$)|(^.+\.cc$)|(^.+\.cpp$)|(^.+\.cxx$)")
     words = line.strip().split("\t ")
     for w in words:
-        if file_regex.match(words):
+        if file_regex.match(w):
             return True
     return False
 
@@ -50,15 +50,13 @@ def check_command_format(result, other_cc_compiles=None, other_cxx_compiles=None
 
 
 def create_command_infos(logger, build_path, output, verbose_list, build_args=""):
-    is_exist = False
-
     make_file = build_path + os.path.sep + DEFAULT_SCONSTRUCT_NAME
     if not os.path.exists(make_file): raise IOError("No SConstruct in " + build_path)
 
     has_verbose = False
     outlines = []
     for verbose in verbose_list:
-        if verbose.find("="):
+        if verbose.find("=") != -1:
             cmd = "cd {}; scons -n {} {}".format(build_path, build_args, verbose)
         else:
             cmd = "cd {}; scons -n {} {}=1".format(build_path, build_args, verbose)
@@ -66,12 +64,11 @@ def create_command_infos(logger, build_path, output, verbose_list, build_args=""
         print cmd
         p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if p.returncode == 0:
-            out, err = p.communicate()
-            if check_command_format(out):
-                has_verbose = True
-                outlines = out
-                break
+        out, err = p.communicate()
+        if check_command_format(out):
+            has_verbose = True
+            outlines = out
+            break
         logger.info("%s; excute fail." % cmd)
 
     if has_verbose:

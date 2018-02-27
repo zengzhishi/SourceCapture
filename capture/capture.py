@@ -599,7 +599,7 @@ def main():
                         # action="store_const",
                         # const="make",
                         nargs="?",
-                        choices=["make", "cmake", "scons"],
+                        choices=["make", "cmake", "scons", "other"],
                         default="make",
                         help="The building type of project you choose.")
 
@@ -628,7 +628,7 @@ def main():
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
     generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
-    extra_build_args = args["extra_build_args"] if build_type == "make" else ""
+    extra_build_args = args["extra_build_args"]
     just_print = args["just_print"]
     update_all = args["update_all"]
     if "build_path" not in args:
@@ -660,7 +660,7 @@ def main():
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # 暂时不编译cmake和Makefile未定义的源文件
-    if build_type in ["cmake", "make"]:
+    if build_type in ["cmake", "make", "scons"]:
         result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)

@@ -201,9 +201,9 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
             raise IOError("No Makefile in " + build_path)
 
     if is_exist:
-        cmd = "cd {}; make -nkw {}".format(build_path, make_args)
+        cmd = "cd {}; make -Bnkw {}".format(build_path, make_args)
     else:
-        cmd = "cd {}; make -nkw -f {} {}".format(build_path, make_file, make_args)
+        cmd = "cd {}; make -Bnkw -f {} {}".format(build_path, make_file, make_args)
 
     logger.info("execute command: " + cmd)
     print cmd

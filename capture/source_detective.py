@@ -540,7 +540,7 @@ def get_present_path_scons(logger, root_path, prefers, build_path=None, output_p
             output_path_file = "/tmp/scons_infos.txt"
             output = open(output_path_file, "w + b")
     else:
-        output = open(output_path + "/msconsinfos.txt", "w + b")
+        output = open(output_path + "/scons_infos.txt", "w + b")
 
     if build_args:
         output = parse_scons.create_command_infos(logger, build_path, output,
