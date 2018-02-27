@@ -537,7 +537,7 @@ class CaptureBuilder(object):
         commands_dump(self.__output_path + "/compile_commands_bc.json", bitcode_output_list)
         return output_list, bitcode_output_list
 
-    def command_exec(self, compile_commands, bc_compile_commands, update_all=False):
+    def command_filter(self, compile_commands, bc_compile_commands, update_all=False):
         commands = copy.deepcopy(compile_commands)
         commands.extend(bc_compile_commands)
         output_list = commands
@@ -547,8 +547,11 @@ class CaptureBuilder(object):
         output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
 
         self._logger.info("Need to recompile commands count: %d" % len(output_list))
+        return output_list
+
+    def command_exec(self, commands):
         command_exec = CommandExec(self._logger)
-        command_exec.distribute_jobs(output_list)
+        command_exec.distribute_jobs(commands)
         command_exec.run()
         return
 
@@ -597,6 +600,9 @@ def main():
 
     parser.add_argument("--extra_build_args", help='Arguments used in building tools. Usage: [--extra_build_args=" ARGS1 ARGS2.. "]')
 
+    parser.add_argument("-n", "--just_print", action='store_true',
+                        help="Just output compile_commands.json and other info, without running commands.")
+
     args = vars(parser.parse_args())
     input_path = args["project_root_path"]
     output_path = args["result_output_path"]
@@ -605,6 +611,7 @@ def main():
     prefers = args["prefers"]
     generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
     extra_build_args = args["extra_build_args"] if build_type == "make" else ""
+    just_print = args["just_print"]
     update_all = args["update_all"]
     if "build_path" not in args:
         build_path = input_path
@@ -640,8 +647,16 @@ def main():
     else:
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)
 
-    print("Start building object file and bc file")
-    capture_builder.command_exec(result, bc_result, update_all)
+    filter_result = capture_builder.command_filter(result, bc_result, update_all)
+    if not just_print:
+        print("Start building object file and bc file")
+        capture_builder.command_exec(filter_result)
+    else:
+        files = list(map(lambda x: x["file"], filter_result))
+        files = sorted(files)
+        with open(output_path + "/files.out", "w") as fout:
+            for file in files:
+                fout.write(file + "\n")
 
 
 if __name__ == "__main__":
