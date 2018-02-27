@@ -340,7 +340,8 @@ class CaptureBuilder(object):
                  build_type=DEFAULT_BUILDING_TYPE,
                  build_path=None,
                  prefers=None,
-                 compiler_id=None):
+                 compiler_id=None,
+                 extra_build_args=None):
         if prefers:
             self.__prefers = prefers
         else:
@@ -360,6 +361,7 @@ class CaptureBuilder(object):
         else:
             self.__compiler_id = DEFAULT_COMPILER_ID
 
+        self._extra_build_args = extra_build_args
 
     def add_prefer_folder(self, folder):
         self.__prefers.append(folder)
@@ -403,7 +405,7 @@ class CaptureBuilder(object):
             sub_paths, files_s, files_h, compile_db = \
                 source_detective.get_present_path_make(self._logger, self.__root_path,
                                                        self.__prefers, self.__build_path,
-                                                       self.__output_path)
+                                                       self.__output_path, build_args=self._extra_build_args)
 
             include_files = files_h
             files_count = len(files_s)
@@ -593,6 +595,8 @@ def main():
     parser.add_argument("--update_all", action='store_true',
                         help="Whether update all.")
 
+    parser.add_argument("--extra_build_args", help='Arguments used in building tools. Usage: [--extra_build_args=" ARGS1 ARGS2.. "]')
+
     args = vars(parser.parse_args())
     input_path = args["project_root_path"]
     output_path = args["result_output_path"]
@@ -600,6 +604,7 @@ def main():
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
     generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
+    extra_build_args = args["extra_build_args"] if build_type == "make" else ""
     update_all = args["update_all"]
     if "build_path" not in args:
         build_path = input_path
@@ -624,7 +629,8 @@ def main():
 
     # CaptureBuilder
     capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
-                                     prefers=prefers, build_type=build_type, build_path=build_path)
+                                     prefers=prefers, build_type=build_type, build_path=build_path,
+                                     extra_build_args=extra_build_args)
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
