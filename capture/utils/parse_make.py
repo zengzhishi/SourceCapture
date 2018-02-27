@@ -269,7 +269,6 @@ def excute_quote_code(s, build_dir):
     return value
 
 
-# TODO: 需要处理一下 -c -o，最终的flags不需要这些, 文件名也不需要加入到flags中
 def parse_flags(logger, build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     skip_count = 0
