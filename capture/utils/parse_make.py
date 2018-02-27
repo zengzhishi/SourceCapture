@@ -201,12 +201,13 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
             raise IOError("No Makefile in " + build_path)
 
     if is_exist:
-        cmd = "cd {}; make -Bnkw {}".format(build_path, make_args)
+        cmd = "cd {}; make -nkw {}".format(build_path, make_args)
     else:
-        cmd = "cd {}; make -Bnkw -f {} {}".format(build_path, make_file, make_args)
+        cmd = "cd {}; make -nkw -f {} {}".format(build_path, make_file, make_args)
 
     logger.info("execute command: " + cmd)
-    p = subprocess.Popen(cmd, shell=True, \
+    print cmd
+    p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
     output.writelines(out)
@@ -230,12 +231,23 @@ def split_cmd_line(line):
 def unbalanced_quotes(s):
     single = 0
     double = 0
+    excute = 0
     for c in s:
         if(c == "'"):
             single += 1
         elif(c == '"'):
             double += 1
-    return (single % 2 == 1 or double % 2 == 1)
+        if(c == "`"):
+            excute += 1
+
+    # 去除转义后的引号带来的影响
+    move_double = s.count('\\"')
+    move_single = s.count("\\'")
+    single -= move_single
+    double -= move_double
+
+    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
+    return is_half_quote
 
 
 def strip_quotes(s):
@@ -245,6 +257,16 @@ def strip_quotes(s):
         return s[1:-1]
     else:
         return s
+
+
+def excute_quote_code(s, build_dir):
+    s_regax = re.match("`(.*)`(.*)", s)
+    excute_cmd = "cd {}; {}".format(build_dir, s_regax.group(1))
+    p = subprocess.Popen(excute_cmd, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, err = p.communicate()
+    value = out.strip("\n") + s_regax.group(2)
+    return value
 
 
 # TODO: 需要处理一下 -c -o，最终的flags不需要这些, 文件名也不需要加入到flags中
@@ -334,6 +356,9 @@ def parse_flags(logger, build_log_in, build_dir,
         line_count += 1
 
         for (i, word) in enumerate(words):
+            if word[0] == '`':
+                word = excute_quote_code(word, working_dir)
+
             if word == "-c":
                 continue
 
@@ -384,12 +409,11 @@ def parse_flags(logger, build_log_in, build_dir,
             if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                if w[0] == '/':
+                if w[0] == '/' or words[i] == "-include":
                     p = w
                 else:
                     p = os.path.abspath(working_dir + os.path.sep + w)
                 if not invalid_include_regex.match(p):
-                    arguments.extend([word, p])
                     if word == "-I":
                         arguments.append(word + p)
                     else:

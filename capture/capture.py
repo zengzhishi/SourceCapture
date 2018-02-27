@@ -11,16 +11,19 @@
 
 import os
 import sys
+import argparse
 import re
-import conf.parse_logger as parse_logger
-import source_detective as source_detective
-import building_process
+import copy
 import subprocess
 import ConfigParser
-
 import hashlib
 import json
-import copy
+
+import conf.parse_logger as parse_logger
+import source_detective
+import building_process
+import build_filter
+
 
 # 需要改为绝对路径
 try:
@@ -60,9 +63,10 @@ class CommandBuilder(building_process.ProcessBuilder):
     def redis_setting(self, host="localhost", port=6379, db=0):
         self.redis_pool = redis.ConnectionPool(host=host, port=port, db=db)
 
-    def basic_setting(self, compile_command, output_path):
+    def basic_setting(self, compile_command, output_path, generate_bitcode):
         self.compile_command = compile_command
         self.output_path = output_path
+        self.generate_bitcode = generate_bitcode
 
     def mission(self, queue, result, locks=[]):
         lock = locks[0]
@@ -122,13 +126,19 @@ class CommandBuilder(building_process.ProcessBuilder):
                 output_command += args_string
                 output_command += custom_args_string
                 output_command += "-c " + src + " "
-                output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
 
                 json_dict = {
                     "directory": directory,
                     "file": src,
-                    "command": output_command
                 }
+
+                if self.generate_bitcode:
+                    output_bitcode_command = output_command + "-emit-llvm "
+                    output_bitcode_command += "-o " + self.output_path + "/" + transfer_name + ".bc "
+                    json_dict["bitcode_command"] = output_bitcode_command
+                output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
+
+                json_dict["command"] = output_command
                 result.append(json_dict)
 
             lock.acquire()
@@ -295,7 +305,7 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
     """
 
     if saving_to_db:
-        pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
+        pool = redis.ConnectionPool(host='localhost', port=6379, db=1)
         redis_instance = redis.Redis(connection_pool=pool)
         for parse in scan_data:
             compiler_confs = {
@@ -324,13 +334,14 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
 
 class CaptureBuilder(object):
     """主要的编译构建脚本生成类"""
-    def __init__(self, logger, \
+    def __init__(self, logger,
                  root_path,
                  output_path=None,
                  build_type=DEFAULT_BUILDING_TYPE,
                  build_path=None,
                  prefers=None,
-                 compiler_id=None):
+                 compiler_id=None,
+                 extra_build_args=None):
         if prefers:
             self.__prefers = prefers
         else:
@@ -345,11 +356,12 @@ class CaptureBuilder(object):
         else:
             self.__output_path = self.__root_path
 
-        if compiler_id is None:
+        if compiler_id is not None:
             self.__compiler_id = compiler_id
         else:
             self.__compiler_id = DEFAULT_COMPILER_ID
 
+        self._extra_build_args = extra_build_args
 
     def add_prefer_folder(self, folder):
         self.__prefers.append(folder)
@@ -393,7 +405,7 @@ class CaptureBuilder(object):
             sub_paths, files_s, files_h, compile_db = \
                 source_detective.get_present_path_make(self._logger, self.__root_path,
                                                        self.__prefers, self.__build_path,
-                                                       self.__output_path)
+                                                       self.__output_path, build_args=self._extra_build_args)
 
             include_files = files_h
             files_count = len(files_s)
@@ -401,13 +413,16 @@ class CaptureBuilder(object):
             # get make prebuild command
             for command_info in compile_db:
                 source_file = command_info["file"]
+                directory = command_info["directory"]
                 flags = command_info["arguments"]
+                if source_file[0] != '/':
+                    source_file = os.path.abspath(directory + os.path.sep + source_file)
 
                 # exclude prebuilded source files from project total sources
                 try:
                     files_s.remove(source_file)
                 except ValueError:
-                    self._logger.warning("file: %s not found, project scan error!" % (source_file))
+                    self._logger.warning("file: %s not found, is compiled multitimes or project scan error!" % (source_file))
 
                 includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
                 final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
@@ -460,8 +475,10 @@ class CaptureBuilder(object):
             include_files = files_h
             files_count = len(files_s)
             global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
-            #global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
-            #global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+
+            global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
+            global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+
             c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
             cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
 
@@ -494,27 +511,47 @@ class CaptureBuilder(object):
         scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
         return source_infos, include_files, files_count
 
-    def command_prebuild(self, source_infos, files_count):
+    def command_prebuild(self, source_infos, generate_bitcode, files_count):
         # if len(source_infos) > 100 and files_count > 5000:
             # 只有任务比较多的时候，构建才需要并行化
         command_builder = CommandBuilder(self._logger)
         command_builder.distribute_jobs(source_infos)
         # setting
-        command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id], self.__output_path)
+        command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id],
+                                      self.__output_path, generate_bitcode)
         command_builder.redis_setting()
         result_list = command_builder.run()
 
         output_list = []
+        bitcode_output_list = []
         while len(result_list):
             json_ob = result_list.pop()
+            if "bitcode_command" in json_ob:
+                command = json_ob.pop("bitcode_command")
+                bc_json_ob = copy.deepcopy(json_ob)
+                bc_json_ob["command"] = command
+                bitcode_output_list.append(bc_json_ob)
             output_list.append(json_ob)
 
         commands_dump(self.__output_path + "/compile_commands.json", output_list)
+        commands_dump(self.__output_path + "/compile_commands_bc.json", bitcode_output_list)
+        return output_list, bitcode_output_list
+
+    def command_filter(self, compile_commands, bc_compile_commands, update_all=False):
+        commands = copy.deepcopy(compile_commands)
+        commands.extend(bc_compile_commands)
+        output_list = commands
+        self._logger.info("All compile_commands count: %d" % len(commands))
+        build_filter_ins = build_filter.BuildFilter(self._logger)
+        transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
+        output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
+
+        self._logger.info("Need to recompile commands count: %d" % len(output_list))
         return output_list
 
-    def command_exec(self, output_list):
+    def command_exec(self, commands):
         command_exec = CommandExec(self._logger)
-        command_exec.distribute_jobs(output_list)
+        command_exec.distribute_jobs(commands)
         command_exec.run()
         return
 
@@ -531,64 +568,66 @@ def parse_prefer_str(prefer_str, input_path):
 
 def main():
     """主要逻辑"""
-    # TODO: 使用比较简洁一点的参数输入方式
-    output_path = ""
-    prefers_str = ""
-    make_type = "cmake"
-    cmake_build_path = ""
-    compiler_id = None
-    if len(sys.argv) == 2:
-        input_path = sys.argv[1]
-    elif len(sys.argv) == 3:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-    elif len(sys.argv) == 4:
-        # 增加了输出目录
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-    elif len(sys.argv) == 5:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-    elif len(sys.argv) == 6:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-        cmake_build_path = sys.argv[5]
-    elif len(sys.argv) == 7:
-        input_path = sys.argv[1]
-        prefers_str = sys.argv[2]
-        output_path = sys.argv[3]
-        make_type = sys.argv[4]
-        cmake_build_path = sys.argv[5]
-        compiler_id = sys.argv[6]
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("project_root_path", nargs="?",
+                        help="The project root path you want to analyze.")
+    parser.add_argument("result_output_path", nargs="?",
+                        help="The project analysis result output path.")
+
+    parser.add_argument("-p", "--prefers", default="all", nargs="*",
+                        help="The prefer directories you want to scan from project. (default: %(default)s)")
+
+    parser.add_argument("-t", "--build_type",
+                        # action="store_const",
+                        # const="make",
+                        nargs="?",
+                        choices=["make", "cmake", "scons"],
+                        default="make",
+                        help="The building type of project you choose.")
+
+    parser.add_argument("-b", "--build_path",
+                        help="The outer project building path.")
+
+    parser.add_argument("-c", "--compiler_id", default="GNU", nargs="?",
+                        choices=["GNU", "Clang"],
+                        help="The command will use which compiler.")
+
+    parser.add_argument("--generate_bitcode", action='store_true',
+                        help="Whether generate bitcode file.")
+
+    parser.add_argument("--update_all", action='store_true',
+                        help="Whether update all.")
+
+    parser.add_argument("--extra_build_args", help='Arguments used in building tools. Usage: [--extra_build_args=" ARGS1 ARGS2.. "]')
+
+    parser.add_argument("-n", "--just_print", action='store_true',
+                        help="Just output compile_commands.json and other info, without running commands.")
+
+    args = vars(parser.parse_args())
+    input_path = args["project_root_path"]
+    output_path = args["result_output_path"]
+    build_type = args["build_type"]
+    compiler_id = args["compiler_id"]
+    prefers = args["prefers"]
+    generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
+    extra_build_args = args["extra_build_args"] if build_type == "make" else ""
+    just_print = args["just_print"]
+    update_all = args["update_all"]
+    if "build_path" not in args:
+        build_path = input_path
     else:
-        sys.stderr.write(
-    """Please input project root path to compiler.
-    Usage:
-        python program_name root_path [prefer_sub_folder1,prefer_sub_folder2,...] [outer_output_path] [build_type] [build_path] [compiler_id]
-        
-    compiler_id = ["GNU", "Clang"]
-""")
-        sys.exit(-1)
+        build_path = args["build_path"]
 
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
 
     # TODO 可能需要添加为参数输入
     config_file = DEFAULT_LOG_CONFIG_FILE
-    logger = parse_logger.getLogger(config_file, new_output="capture.log")
-
-    # command_output_path = input_path
-    # if output_path:
-    #     command_output_path = output_path
-    #     logger.info("output_path is None, set output path: %s" % input_path)
+    logger = parse_logger.getLogger(config_file, new_output=output_path + "/capture.log")
 
     # 获取关注目录
-    prefers = parse_prefer_str(prefers_str, input_path)
+    if "all" in prefers:
+        prefers = parse_prefer_str("all", input_path)
     logger.info("prefer directories: %s" % str(prefers))
 
     if compiler_id not in COMPILER_COMMAND_MAP:
@@ -597,16 +636,27 @@ def main():
 
     # CaptureBuilder
     capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
-                                     prefers=prefers, build_type=make_type, build_path=cmake_build_path)
+                                     prefers=prefers, build_type=build_type, build_path=build_path,
+                                     extra_build_args=extra_build_args)
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # 暂时不编译cmake和Makefile未定义的源文件
-    if make_type in ["cmake", "make"]:
-        result = capture_builder.command_prebuild(source_infos[:-2], files_count)
+    if build_type in ["cmake", "make"]:
+        result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
-        result = capture_builder.command_prebuild(source_infos, files_count)
-    capture_builder.command_exec(result)
+        result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)
+
+    filter_result = capture_builder.command_filter(result, bc_result, update_all)
+    if not just_print:
+        print("Start building object file and bc file")
+        capture_builder.command_exec(filter_result)
+    else:
+        files = list(map(lambda x: x["file"], filter_result))
+        files = sorted(files)
+        with open(output_path + "/files.out", "w") as fout:
+            for file in files:
+                fout.write(file + "\n")
 
 
 if __name__ == "__main__":
