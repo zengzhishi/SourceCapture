@@ -354,8 +354,13 @@ class CaptureBuilder(object):
             self.__prefers = []
         self.__root_path = os.path.abspath(root_path)
         self.__build_type = build_type
-        self.__build_path = build_path
         self._logger = logger
+
+        # 先这样先
+        if build_path:
+            self.__build_path = build_path
+        else:
+            self.__build_path = self.__root_path
 
         if output_path:
             self.__output_path = os.path.abspath(output_path)
@@ -496,7 +501,8 @@ class CaptureBuilder(object):
                                                                                 files_h,
                                                                                 compile_db)
 
-        else:   # 连构建脚本都没有，直接构建
+        else:
+            # 连构建脚本都没有，直接构建
             sub_paths, files_s, files_h = source_detective.get_present_path(self.__root_path, self.__prefers)
             include_files = files_h
             files_count = len(files_s)
@@ -532,6 +538,47 @@ class CaptureBuilder(object):
         # dumping data
         scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
         return source_infos, include_files, files_count
+
+    def judge_building(self):
+        if self.__build_type == "other":
+            # 检查 cmake
+            self._logger.info("Checking and trying to build cmake environment.")
+            status, build_path = source_detective.using_cmake(self.__root_path, self.__output_path)
+            if status:
+                self.__build_path = build_path
+                self.__build_type = "cmake"
+                self._logger.info("Build cmake environment succes!")
+                return
+
+            # 检查 autotools
+            self._logger.info("Building cmake fail; Checking and trying to build autotools environment.")
+            status, build_path = source_detective.using_autotools(self.__root_path, self.__output_path)
+            if status:
+                self.__build_path = build_path
+                self.__build_type = "make"
+                self._logger.info("Build configure environment succes!")
+                return
+
+            # 检查 Makefile
+            self._logger.info("Building autotools fail; Checking Makefile.")
+            status, build_path = source_detective.using_make(self.__root_path)
+            if status:
+                self.__build_path = self.__root_path
+                self.__build_type = "make"
+                self._logger.info("Makefile exist!")
+                return
+
+            # 检查 scons
+            self._logger.info("Building Makefile fail; Checking scons.")
+            status, build_path = source_detective.using_scons(self.__root_path)
+            if status:
+                self.__build_path = self.__root_path
+                self.__build_type = "scons"
+                self._logger.info("SConstruct exist!")
+                return
+
+            self._logger.info("Without other Useful tools, using default build_type:[%s]", self.__build_type)
+            self.__build_path = self.__root_path
 
     def command_prebuild(self, source_infos, generate_bitcode, files_count):
         # if len(source_infos) > 100 and files_count > 5000:
@@ -653,10 +700,7 @@ def main():
     extra_build_args = args["extra_build_args"]
     just_print = args["just_print"]
     update_all = args["update_all"]
-    if "build_path" not in args:
-        build_path = input_path
-    else:
-        build_path = args["build_path"]
+    build_path = args["build_path"] if "build_path" in args else ""
 
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
@@ -671,13 +715,15 @@ def main():
     logger.info("prefer directories: %s" % str(prefers))
 
     if compiler_id not in COMPILER_COMMAND_MAP:
-        sys.stderr.write("No such compiler_id!")
+        sys.stderr.write("No such compiler_id! Use default compiler_id")
         compiler_id = None
 
     # CaptureBuilder
     capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
                                      prefers=prefers, build_type=build_type, build_path=build_path,
                                      extra_build_args=extra_build_args)
+
+    capture_builder.judge_building()
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 

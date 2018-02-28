@@ -49,9 +49,15 @@ def check_command_format(result, other_cc_compiles=None, other_cxx_compiles=None
     return False
 
 
+def check_sconstruct_exist(build_path):
+    build_file = build_path + os.path.sep + DEFAULT_SCONSTRUCT_NAME
+    return os.path.exists(build_file)
+
+
 def create_command_infos(logger, build_path, output, verbose_list, build_args=""):
-    make_file = build_path + os.path.sep + DEFAULT_SCONSTRUCT_NAME
-    if not os.path.exists(make_file): raise IOError("No SConstruct in " + build_path)
+    is_exist = check_sconstruct_exist(build_path)
+    if not is_exist:
+        raise IOError("No SConstruct in " + build_path)
 
     has_verbose = False
     outlines = []

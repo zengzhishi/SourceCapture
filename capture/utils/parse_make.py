@@ -182,10 +182,7 @@ def exec_makefile(new_makefile, field_name):
     pass
 
 
-# 使用 make -Bnkw 方式获取编译命令的方法
-def create_command_infos(logger, build_path, output, makefile_name=None,
-                 make_args=""):
-    make_file = makefile_name
+def check_makefile(build_path, makefile_name=None):
     is_exist = False
     if not makefile_name:
         for makefile_name in DEFAULT_MAKEFILE_NAME:
@@ -199,6 +196,18 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
         make_file = build_path + os.path.sep + makefile_name
         if not os.path.exists(make_file):
             raise IOError("No Makefile in " + build_path)
+
+    return is_exist
+
+
+# 使用 make -Bnkw 方式获取编译命令的方法
+def create_command_infos(logger, build_path, output, makefile_name=None,
+                 make_args=""):
+    make_file = makefile_name
+    try:
+        is_exist = check_makefile(build_path, makefile_name)
+    except IOError:
+        raise
 
     if is_exist:
         cmd = "cd {}; make -Bnkw {}".format(build_path, make_args)

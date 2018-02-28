@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import shutil
 import subprocess
 import Queue
 import ConfigParser
@@ -55,6 +56,40 @@ def get_directions(path):
 
 
 # cmake project
+def using_cmake(path, output_path, cmake_build_args=""):
+    """
+    TODO: 检查项目是否有cmake构建方式支持，并执行cmake，返回结果
+    :param path:                        项目路径
+    :param output_path:                 输出路径
+    :param cmake_build_args:            cmake执行的参数
+    :return:
+        status:                         检查和执行的结果
+        build_path:                     cmake outer_build的路径
+    """
+    filename = path + os.path.sep + "CMakeLists.txt"
+    if not os.path.exists(filename):
+        return False, None
+
+    build_folder_path = output_path + os.path.sep + "build"
+    if not os.path.exists(build_folder_path):
+        os.makedirs(build_folder_path)
+    else:
+        shutil.rmtree(build_folder_path)
+        os.makedirs(build_folder_path)
+
+    cmd = "cd {}; cmake {} {}".format(build_folder_path, path, cmake_build_args)
+    print "excute command: %s" % cmd
+
+    p = subprocess.Popen(cmd, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, err = p.communicate()
+
+    if p.returncode == 0:
+        return True, build_folder_path
+
+    return False, None
+
+
 def check_cmake(path, project_path, cmake_build_path):
     """
     检查是否有CMakeList.txt
@@ -247,7 +282,9 @@ def cmake_project_walk(root_path, prefers, cmake_build_path=None):
         "definitions": [],
         "includes": includes,
         "exec_directory": root_path,
-        "compiler_type": ""
+        "compiler_type": "",
+        "custom_flags": [],
+        "custom_definitions": [],
     }]
     yield undefind_info_list
 
@@ -275,6 +312,8 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         "exec_directory": root_path,
         "compiler_type": "CXX",
         "flags": DEFAULT_CXX_FLAGS,
+        "custom_flags": [],
+        "custom_definitions": [],
     }
     # TODO：对于未定义的源文件，需要返回记录，但是不需要构建编译命令
     for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
@@ -310,6 +349,29 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
 
 
 # autotools project
+def using_autotools(path, output_path, configure_args=""):
+    filename = path + os.path.sep + "configure"
+    if not os.path.exists(filename):
+        return False, None
+
+    build_folder_path = output_path + os.path.sep + "build"
+    if not os.path.exists(build_folder_path):
+        os.makedirs(build_folder_path)
+    else:
+        shutil.rmtree(build_folder_path)
+        os.makedirs(build_folder_path)
+
+    cmd = "cd {}; {} {}".format(build_folder_path, filename, configure_args)
+
+    p = subprocess.Popen(cmd, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out, err = p.communicate()
+    if p.returncode == 0:
+        return True, build_folder_path
+
+    return False, None
+
+
 def get_definitions(path):
     ## TODO 可以选择一个类来封装，使得该方法可以被重写
     """获取当前路径下Makefile.am中的宏定义"""
@@ -341,6 +403,7 @@ def autotools_project_walk(root_path, prefers):
         (present_path, old_definitions) = to_walks.get()
         definitions = get_definitions(present_path)
         def_str = ""
+        print "\tscan path:" + present_path
 
         if len(definitions) == 0:
             definitions = old_definitions
@@ -406,6 +469,18 @@ def get_present_path_autotools(root_path, prefers):
 
 
 # GNU make project
+def using_make(path):
+    try:
+        is_exist = parse_make.check_makefile(path)
+    except IOError:
+        return False, None
+
+    if is_exist:
+        return True, path
+    else:
+        return False, None
+
+
 def selective_walk(root_path, prefers):
     to_walks = Queue.Queue()
 
@@ -419,6 +494,7 @@ def selective_walk(root_path, prefers):
     level = 0
     while not to_walks.empty():
         present_path = to_walks.get()
+        print "\tscan path:" + present_path
 
         files = []
         for file_name in os.listdir(present_path):
@@ -509,6 +585,13 @@ def get_present_path(root_path, prefers):
 
 
 # SCons project
+def using_scons(path):
+    is_exist = parse_scons.check_sconstruct_exist(path)
+    if is_exist:
+        return True, path
+    return False, None
+
+
 def get_present_path_scons(logger, root_path, prefers, build_path=None, output_path=None, build_args=None):
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
