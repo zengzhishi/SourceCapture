@@ -398,6 +398,33 @@ class CaptureBuilder(object):
         else:
             raise TypeError("object 'prefers' is not ListType")
 
+    def _build_default_commands(self, sub_paths, files_s, source_infos):
+        global_includes = map(lambda path: os.path.abspath(path), sub_paths)
+        # replace some illegal symbols
+        # global_includes = map(lambda path: os.path.abspath(path.replace(' ', '\ ')), global_includes)
+        # global_includes = map(lambda path: os.path.abspath(path.replace('(', '\(')), global_includes)
+        # global_includes = map(lambda path: os.path.abspath(path.replace(')', '\)')), global_includes)
+        c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
+        cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False,
+                           files_s)
+        c_file_infos = {
+            "source_files": c_files,
+            "includes": list(global_includes),
+            "definitions": DEFAULT_MACROS,
+            "flags": DEFAULT_FLAGS,
+            "exec_directory": self.__build_path if self.__build_path else self.__root_path,
+            "compiler_type": "C",
+            "custom_flags": [],
+            "custom_definitions": [],
+            "config_from": []
+        }
+        cxx_file_infos = copy.deepcopy(c_file_infos)
+        cxx_file_infos["source_files"] = cpp_files
+        cxx_file_infos["compiler_type"] = "CXX"
+        cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
+        source_infos.append(c_file_infos)
+        source_infos.append(cxx_file_infos)
+
     def _tranfer_compile_db(self, sub_paths, files_s, files_h, compile_db):
         include_files = files_h
         files_count = len(files_s)
@@ -440,26 +467,7 @@ class CaptureBuilder(object):
 
         # use sub_paths to build up globle includes, and get system includes
         # build up command for left source files
-        global_includes = map(lambda path: os.path.abspath(path), sub_paths)
-        c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
-        cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
-        c_file_infos = {
-            "source_files": c_files,
-            "includes": list(global_includes),
-            "definitions": DEFAULT_MACROS,
-            "flags": DEFAULT_FLAGS,
-            "exec_directory": self.__build_path if self.__build_path else self.__root_path,
-            "compiler_type": "C",
-            "custom_flags": [],
-            "custom_definitions": [],
-            "config_from": []
-        }
-        cxx_file_infos = copy.deepcopy(c_file_infos)
-        cxx_file_infos["source_files"] = cpp_files
-        cxx_file_infos["compiler_type"] = "CXX"
-        cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
-        source_infos.append(c_file_infos)
-        source_infos.append(cxx_file_infos)
+        self._build_default_commands(sub_paths, files_s, source_infos)
         return source_infos, include_files, files_count
 
     def scan_project(self):
@@ -504,31 +512,8 @@ class CaptureBuilder(object):
             sub_paths, files_s, files_h = source_detective.get_present_path(self.__root_path, self.__prefers)
             include_files = files_h
             files_count = len(files_s)
-            global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
 
-            # global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
-            # global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
-
-            c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
-            cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
-
-            c_file_infos = {
-                "source_files": c_files,
-                "includes": list(global_includes),
-                "definitions": DEFAULT_MACROS,
-                "flags": DEFAULT_FLAGS,
-                "exec_directory": self.__build_path if self.__build_path else self.__root_path,
-                "compiler_type": "C",
-                "custom_flags": [],
-                "custom_definitions": [],
-                "config_from": []
-            }
-            cxx_file_infos = copy.deepcopy(c_file_infos)
-            cxx_file_infos["source_files"] = cpp_files
-            cxx_file_infos["compiler_type"] = "CXX"
-            cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
-            source_infos.append(c_file_infos)
-            source_infos.append(cxx_file_infos)
+            self._build_default_commands(sub_paths, files_s, source_infos)
 
         self._logger.info("End of Scaning project folders...")
 
