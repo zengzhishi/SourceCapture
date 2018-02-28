@@ -36,7 +36,7 @@ except ImportError:
 # 基本配置项
 DEFAULT_CONFIG_FILE = "conf/capture.cfg"
 DEFAULT_COMPILER_ID = "GNU"
-DEFAULT_BUILDING_TYPE = "make"
+DEFAULT_BUILDING_TYPE = "other"
 
 
 def load_compiler(config, compiler_map):
@@ -55,6 +55,9 @@ COMPILER_COMMAND_MAP = {}
 config = ConfigParser.ConfigParser()
 config.read(DEFAULT_CONFIG_FILE)
 DEFAULT_LOG_CONFIG_FILE = config.get("Default", "logging_config")
+DEFAULT_FLAGS = config.get("Default", "default_flags").split()
+DEFAULT_MACROS = config.get("Default", "default_macros").split(",")
+DEFAULT_CXX_FLAGS = config.get("Default", "default_cxx_flags").split()
 COMPILER_COMMAND_MAP, DEFAULT_COMPILE_COMMAND = load_compiler(config, COMPILER_COMMAND_MAP)
 
 
@@ -122,8 +125,7 @@ class CommandBuilder(building_process.ProcessBuilder):
 
                 transfer_name = file_args_MD5Calc(src, \
                                       job_dict["flags"], job_dict["definitions"], job_dict["includes"], custom_args_string)
-                output_command = self.compile_command[job_dict["compiler_type"]] + " "
-                output_command += args_string
+                output_command = " " + args_string
                 output_command += custom_args_string
                 output_command += "-c " + src + " "
 
@@ -133,11 +135,15 @@ class CommandBuilder(building_process.ProcessBuilder):
                 }
 
                 if self.generate_bitcode:
-                    output_bitcode_command = output_command + "-emit-llvm "
+                    output_bitcode_command = "clang" + output_command + "-flto "
+                    if job_dict["compiler_type"] == "CXX":
+                        output_bitcode_command = "clang++" + output_command + "-flto "
+
                     output_bitcode_command += "-o " + self.output_path + "/" + transfer_name + ".bc "
                     json_dict["bitcode_command"] = output_bitcode_command
                 output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
 
+                output_command = self.compile_command[job_dict["compiler_type"]] + output_command
                 json_dict["command"] = output_command
                 result.append(json_dict)
 
@@ -382,7 +388,7 @@ class CaptureBuilder(object):
     @prefers.setter
     def prefers(self, prefers):
         import types
-        if type(prefers) == types.ListType:
+        if isinstance(prefers, types.ListType):
             self.__prefers = prefers
         else:
             raise TypeError("object 'prefers' is not ListType")
@@ -435,8 +441,8 @@ class CaptureBuilder(object):
         c_file_infos = {
             "source_files": c_files,
             "includes": list(global_includes),
-            "definitions": [],
-            "flags": ["-g", "-fPIC"],
+            "definitions": DEFAULT_MACROS,
+            "flags": DEFAULT_FLAGS,
             "exec_directory": self.__build_path if self.__build_path else self.__root_path,
             "compiler_type": "C",
             "custom_flags": [],
@@ -447,7 +453,7 @@ class CaptureBuilder(object):
         cxx_file_infos["source_files"] = cpp_files
         cxx_file_infos["compiler_type"] = "CXX"
         # TODO: 这里可能需要从其他那里获取
-        cxx_file_infos["flags"].append("-std=c++14")
+        cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
         source_infos.append(c_file_infos)
         source_infos.append(cxx_file_infos)
         return source_infos, include_files, files_count
@@ -462,8 +468,10 @@ class CaptureBuilder(object):
         if self.__build_type == "cmake":
             if not self.__build_path:
                 self.__build_path = self.__root_path + "/build"
+
             source_infos, include_files, files_count = \
                source_detective.get_present_path_cmake(self.__root_path, self.__prefers, self.__build_path)
+
         elif self.__build_type == "make":
             # TODO: make 项目构建，只要生成了Makefile就能使用的方法(只针对编译，不针对链接以及其他工作)
             # scan project files
@@ -494,21 +502,17 @@ class CaptureBuilder(object):
             files_count = len(files_s)
             global_includes = map(lambda path: os.path.abspath(path.replace(' ', "_")), sub_paths)
 
-            global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
-            global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
+            # global_includes = map(lambda path: os.path.abspath(path.replace('(', "")), global_includes)
+            # global_includes = map(lambda path: os.path.abspath(path.replace(')', "")), global_includes)
 
             c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
             cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False, files_s)
 
-            is_has_configure = os.path.exists(self.__root_path + "/configure")
-            definitions = []
-            if is_has_configure:
-                definitions.append("HAVE_CONFIG_H")
             c_file_infos = {
                 "source_files": c_files,
                 "includes": list(global_includes),
-                "definitions": definitions,
-                "flags": ["-g", "-fPIC"],
+                "definitions": DEFAULT_MACROS,
+                "flags": DEFAULT_FLAGS,
                 "exec_directory": self.__build_path if self.__build_path else self.__root_path,
                 "compiler_type": "C",
                 "custom_flags": [],
@@ -519,7 +523,7 @@ class CaptureBuilder(object):
             cxx_file_infos["source_files"] = cpp_files
             cxx_file_infos["compiler_type"] = "CXX"
             # TODO: 这里可能需要从其他那里获取
-            cxx_file_infos["flags"].append("-std=c++14")
+            cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
             source_infos.append(c_file_infos)
             source_infos.append(cxx_file_infos)
 
@@ -585,7 +589,25 @@ def parse_prefer_str(prefer_str, input_path):
 
 
 def main():
-    """主要逻辑"""
+    """主要逻辑
+
+        如果输入的参数只有 project_root_path 和 result_output_path, 则采用的是默认配置，需要加入build_type的试错，选择一个比较合理的构建方式
+        TODO: 构建方式自动匹配
+        1. 如果项目中有CMakeList.txt文件，将优先选择使用CMake方式构建，
+            i. 在output_path路径下创建一个build目录
+            ii. 进入build目录后执行 cmake ${project_root_path} 产生cmake的输出
+            iii. 如果cmake构建成功，进入cmake解析，并最终输出结果
+                如果cmake构建失败，则进行其他方式的匹配（暂定，后面需要完成不需要cmake完整执行也能尽可能解析的办法）
+        2. 如果项目中有configure可执行文件，则使用autotools构建，
+            i. 在output_path路径下创建一个build目录
+            ii. 进入build目录后执行 ./configure ${project_root_path} 产生Makefile
+            iii. 执行成功，将build_path设置为build的目录，进入步骤3,
+                失败则直接进入步骤3
+        3. 如果build_path不为空，则在build_path中执行make -nkw的解析
+            如果build_path为空，则在root_path中执行解析
+        4. 如果以上方式都失败了，直接使用默认参数来生成gcc命令了
+
+    """
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("project_root_path", nargs="?",
                         help="The project root path you want to analyze.")
@@ -600,7 +622,7 @@ def main():
                         # const="make",
                         nargs="?",
                         choices=["make", "cmake", "scons", "other"],
-                        default="make",
+                        default="other",
                         help="The building type of project you choose.")
 
     parser.add_argument("-b", "--build_path",
@@ -627,7 +649,7 @@ def main():
     build_type = args["build_type"]
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
-    generate_bitcode = args["generate_bitcode"] if compiler_id == "Clang" else False
+    generate_bitcode = args["generate_bitcode"]
     extra_build_args = args["extra_build_args"]
     just_print = args["just_print"]
     update_all = args["update_all"]

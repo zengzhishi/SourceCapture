@@ -9,7 +9,7 @@ import ConfigParser
 import utils.parse_cmake as parse_cmake
 import utils.parse_make as parse_make
 import utils.parse_scons as parse_scons
-from capture import DEFAULT_CONFIG_FILE
+from capture import DEFAULT_CONFIG_FILE, DEFAULT_CXX_FLAGS, DEFAULT_MACROS, DEFAULT_FLAGS
 
 # suffix config loading
 config = ConfigParser.ConfigParser()
@@ -92,8 +92,8 @@ def get_relative_build_path(path, project_path, cmake_build_path):
 
 def set_default(infos):
     """TODO: 需要设置一下基本的宏定义和编译flags"""
-    infos["flags"] = ["-fPIC", "-o2"]
-    infos["definitions"] = ["HAVE_CONFIG_H"]
+    infos["flags"] = DEFAULT_FLAGS
+    infos["definitions"] = DEFAULT_MACROS
     return
 
 
@@ -264,7 +264,6 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         include_files
         files_count
     """
-    # TODO: 这些set可以写到globle中，没必要每个地方配置一个
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
 
@@ -274,7 +273,8 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
     cxx_files_info = {
         "source_files": [],
         "exec_directory": root_path,
-        "compiler_type": "CXX"
+        "compiler_type": "CXX",
+        "flags": DEFAULT_CXX_FLAGS,
     }
     # TODO：对于未定义的源文件，需要返回记录，但是不需要构建编译命令
     for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
@@ -283,7 +283,7 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
                 continue
             if not info["compiler_type"]:
                 set_default(info)
-                cxx_files_info["flags"] = info["flags"]
+                cxx_files_info["flags"].extend(info["flags"])
                 cxx_files_info["definitions"] = info["definitions"]
                 cxx_files_info["includes"] = info["includes"]
                 lefts_s = []
