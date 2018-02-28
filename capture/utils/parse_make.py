@@ -6,7 +6,7 @@
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-02-02 14:25:36
     @LastModif: 2018-02-02 14:26:29
-    @Note:  TODO: 完成一般 Makefile 的解析
+    @Note:  make以及gcc命令的解析
 """
 
 import os
@@ -158,7 +158,7 @@ def print_info_analysis(output_path, targets=None):
     return all_params_dicts, all_need_params
 
 
-def modify_makefile(echo_args, root_path, \
+def modify_makefile(echo_args, root_path,
                     makefile, new_makefile, phony_target="capture_echo_values"):
     """
     复制原来的makefile, 并将参数输出的伪目标语句加入到新的Makefile中, 形成新的makefile
@@ -229,8 +229,7 @@ def split_cmd_line(line):
     # Pass 2: merge words so that the no. of quotes is balanced
     res = []
     for w in words:
-        # TODO:这里能处理变量里面有空格的情况, 参考使用到cmake的解析中
-        if(len(res) > 0 and unbalanced_quotes(res[-1])):
+        if len(res) > 0 and unbalanced_quotes(res[-1]):
             res[-1] += " " + w
         else:
             res.append(w)
@@ -242,11 +241,11 @@ def unbalanced_quotes(s):
     double = 0
     excute = 0
     for c in s:
-        if(c == "'"):
+        if c == "'":
             single += 1
-        elif(c == '"'):
+        elif c == '"':
             double += 1
-        if(c == "`"):
+        if c == "`":
             excute += 1
 
     # 去除转义后的引号带来的影响

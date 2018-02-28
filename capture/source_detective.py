@@ -58,7 +58,6 @@ def get_directions(path):
 # cmake project
 def using_cmake(path, output_path, cmake_build_args=""):
     """
-    TODO: 检查项目是否有cmake构建方式支持，并执行cmake，返回结果
     :param path:                        项目路径
     :param output_path:                 输出路径
     :param cmake_build_args:            cmake执行的参数
@@ -126,7 +125,6 @@ def get_relative_build_path(path, project_path, cmake_build_path):
 
 
 def set_default(infos):
-    """TODO: 需要设置一下基本的宏定义和编译flags"""
     infos["flags"] = DEFAULT_FLAGS
     infos["definitions"] = DEFAULT_MACROS
     return
@@ -315,7 +313,6 @@ def get_present_path_cmake(root_path, prefers, cmake_build_path=None):
         "custom_flags": [],
         "custom_definitions": [],
     }
-    # TODO：对于未定义的源文件，需要返回记录，但是不需要构建编译命令
     for info_list in cmake_project_walk(root_path, prefers, cmake_build_path):
         for info in info_list:
             if len(info["source_files"]) == 0:

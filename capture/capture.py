@@ -457,7 +457,6 @@ class CaptureBuilder(object):
         cxx_file_infos = copy.deepcopy(c_file_infos)
         cxx_file_infos["source_files"] = cpp_files
         cxx_file_infos["compiler_type"] = "CXX"
-        # TODO: 这里可能需要从其他那里获取
         cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
         source_infos.append(c_file_infos)
         source_infos.append(cxx_file_infos)
@@ -478,7 +477,6 @@ class CaptureBuilder(object):
                source_detective.get_present_path_cmake(self.__root_path, self.__prefers, self.__build_path)
 
         elif self.__build_type == "make":
-            # TODO: make 项目构建，只要生成了Makefile就能使用的方法(只针对编译，不针对链接以及其他工作)
             # scan project files
             sub_paths, files_s, files_h, compile_db = \
                 source_detective.get_present_path_make(self._logger, self.__root_path,
@@ -528,7 +526,6 @@ class CaptureBuilder(object):
             cxx_file_infos = copy.deepcopy(c_file_infos)
             cxx_file_infos["source_files"] = cpp_files
             cxx_file_infos["compiler_type"] = "CXX"
-            # TODO: 这里可能需要从其他那里获取
             cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
             source_infos.append(c_file_infos)
             source_infos.append(cxx_file_infos)
@@ -639,7 +636,6 @@ def main():
     """主要逻辑
 
         如果输入的参数只有 project_root_path 和 result_output_path, 则采用的是默认配置，需要加入build_type的试错，选择一个比较合理的构建方式
-        TODO: 构建方式自动匹配
         1. 如果项目中有CMakeList.txt文件，将优先选择使用CMake方式构建，
             i. 在output_path路径下创建一个build目录
             ii. 进入build目录后执行 cmake ${project_root_path} 产生cmake的输出
@@ -649,10 +645,11 @@ def main():
             i. 在output_path路径下创建一个build目录
             ii. 进入build目录后执行 ./configure ${project_root_path} 产生Makefile
             iii. 执行成功，将build_path设置为build的目录，进入步骤3,
-                失败则直接进入步骤3
-        3. 如果build_path不为空，则在build_path中执行make -nkw的解析
+                失败则直接进入步骤4
+        3. 如果项目中有SConstruct文件，则使用scons构建
+        4. 如果build_path不为空，则在build_path中执行make -nkw的解析
             如果build_path为空，则在root_path中执行解析
-        4. 如果以上方式都失败了，直接使用默认参数来生成gcc命令了
+        5. 如果以上方式都失败了，直接使用默认参数来生成gcc命令了
 
     """
     parser = argparse.ArgumentParser(description="")
@@ -705,7 +702,6 @@ def main():
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
 
-    # TODO 可能需要添加为参数输入
     config_file = DEFAULT_LOG_CONFIG_FILE
     logger = parse_logger.getLogger(config_file, new_output=output_path + "/capture.log")
 
