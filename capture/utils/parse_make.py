@@ -335,7 +335,7 @@ def parse_flags(logger, build_log_in, build_dir,
     for line in build_log_in:
         # Concatenate line if need
         accumulate_line = line
-        while (line.endswith('\\\n')):
+        while line.endswith('\\\n'):
             accumulate_line = accumulate_line[:-2]
             line = next(build_log_in, '')
             accumulate_line += line
@@ -343,16 +343,16 @@ def parse_flags(logger, build_log_in, build_dir,
 
         # Parse directory that make entering/leaving
         enter_dir = make_enter_dir.match(line)
-        if (make_enter_dir.match(line)):
+        if make_enter_dir.match(line):
             working_dir = enter_dir.group('dir')
             dir_stack.append(working_dir)
-        elif (make_leave_dir.match(line)):
+        elif make_leave_dir.match(line):
             dir_stack.pop()
             working_dir = dir_stack[-1]
 
-        if (cc_compile_regex.match(line)):
+        if cc_compile_regex.match(line):
             compiler = 'C'
-        elif (cpp_compile_regex.match(line)):
+        elif cpp_compile_regex.match(line):
             compiler = 'CXX'
         else:
             continue
@@ -444,8 +444,7 @@ def parse_flags(logger, build_log_in, build_dir,
             skip_count += 1
             continue
 
-        # add entry to database
-        logger.info("args={} --> {}".format(len(arguments), filepath))
+        # logger.info("args={} --> {}".format(len(arguments), filepath))
         # arguments.append(filepath)
         # TODO performance: serialize to json file here?
         compile_db.append({
@@ -455,6 +454,6 @@ def parse_flags(logger, build_log_in, build_dir,
             'compiler': compiler
         })
 
-    return (line_count, skip_count, compile_db)
+    return line_count, skip_count, compile_db
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

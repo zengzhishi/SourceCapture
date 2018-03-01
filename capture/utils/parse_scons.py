@@ -69,7 +69,7 @@ def create_command_infos(logger, build_path, output, verbose_list, build_args=""
         logger.info("try to execute command: " + cmd)
         print cmd
         p = subprocess.Popen(cmd, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         out, err = p.communicate()
         if check_command_format(out):
             has_verbose = True

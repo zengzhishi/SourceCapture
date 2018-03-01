@@ -481,15 +481,16 @@ class CaptureBuilder(object):
             if not self.__build_path:
                 self.__build_path = self.__root_path + "/build"
 
-            source_infos, include_files, files_count = \
-               source_detective.get_present_path_cmake(self.__root_path, self.__prefers, self.__build_path)
+            cmake_analyzer = source_detective.CMakeAnalyzer(self._logger, self.__root_path,
+                                                            self.__output_path, self.__prefers, self.__build_path)
+            source_infos, include_files, files_count = cmake_analyzer.get_project_infos()
 
         elif self.__build_type == "make":
             # scan project files
+            make_analyzer = source_detective.MakeAnalyzer(self._logger, self.__root_path,
+                                                          self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
-                source_detective.get_present_path_make(self._logger, self.__root_path,
-                                                       self.__prefers, self.__build_path,
-                                                       self.__output_path, build_args=self._extra_build_args)
+                make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
 
             source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
                                                                                 files_s,
@@ -497,10 +498,10 @@ class CaptureBuilder(object):
                                                                                 compile_db)
 
         elif self.__build_type == "scons":
+            scons_analyzer = source_detective.SConsAnalyzer(self._logger, self.__root_path,
+                                                            self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
-                source_detective.get_present_path_scons(self._logger, self.__root_path,
-                                                       self.__prefers, self.__build_path,
-                                                       self.__output_path, build_args=self._extra_build_args)
+                scons_analyzer.get_project_infos_scons(build_args=self._extra_build_args)
 
             source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
                                                                                 files_s,
@@ -509,7 +510,9 @@ class CaptureBuilder(object):
 
         else:
             # 连构建脚本都没有，直接构建
-            sub_paths, files_s, files_h = source_detective.get_present_path(self.__root_path, self.__prefers)
+            analyzer = source_detective.Analyzer(self._logger, self.__root_path,
+                                                 self.__output_path, self.__prefers, self.__build_path)
+            sub_paths, files_s, files_h = analyzer.get_project_infos()
             include_files = files_h
             files_count = len(files_s)
 
