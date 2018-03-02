@@ -55,7 +55,7 @@ def get_directions(path):
     return paths
 
 
-# cmake project
+# cmake project with building temp files
 def using_cmake(path, output_path, cmake_build_args=""):
     """
     :param path:                        项目路径

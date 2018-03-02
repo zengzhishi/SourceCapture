@@ -46,7 +46,8 @@ Makefile直接构建的项目能提取比较完整的命令参数
 26. bazel构建工具的调研和集成 **delay 暂时先不管，不够常见，而且是主要用于java的**
 27. ~~自动选择构建方式模式的集成, 采用outer build的方式，尝试执行，逐个测试CMAKE，autotools，scons和make **doing**~~
 28. redis 数据库创建和存储的本地化
-29. **autotools项目的 outer_project 方式配置解析**
+29. autotools项目的 outer_project 方式配置解析，~~目前完成了有configure可执行文件的outer_project配置，~~
+    但是如果只有configure.ac，Makefile.am文件时，暂时还没办法找到比较有效的outer_project 配置方式，autotools工具基本上都没有提供指定输入路径的方式，只针对当前路径下配置的方式，产生的cache文件也会存储在当前目录.
 30. 结果输出目录的管理需要更新, 所有目标文件创建一个新的目录来存储，其他信息文件放在上层，redis放在另一个目录
 31. 测试系统的健壮性 **doing**
 
