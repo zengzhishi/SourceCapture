@@ -183,6 +183,7 @@ class AutoToolsParser(object):
                 present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
 
                 for word in words:
+                    # TODO: 针对-I -inlcude 等可以在后面接空格的解析存在顺序无法保留的问题，需要对这部分进行处理
                     temp = word
                     with_var_line_match = with_var_line_regex.match(temp)
                     # slices will be a reversed list
