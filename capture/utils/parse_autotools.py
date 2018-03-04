@@ -36,7 +36,7 @@ appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*(.*)")
 
 def _check_undefined(slices):
     for slice in slices:
-        if re.match("$\([a-zA-Z_][a-zA-Z0-9_]*\)", slice):
+        if re.search(r"\$\([a-zA-Z_][a-zA-Z0-9_]*\)", slice):
             return True
     return False
 
@@ -65,6 +65,12 @@ def split_line(line):
         else:
             res.append(w)
     return res
+
+
+def dump_data(json_dict, output_path):
+    import json
+    with open(output_path, "w") as fout:
+        json.dump(json_dict, fout, indent=4)
 
 
 class AutoToolsParser(object):
@@ -110,6 +116,7 @@ class AutoToolsParser(object):
 
             self._reading_makefile_am(am_pair_var, fhandle_am)
             fhandle_am.close()
+            dump_data(self.makefile_am_info[file_path], self._output_path + "/make_file_result.json")
         return
 
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
@@ -121,7 +128,7 @@ class AutoToolsParser(object):
         )
         for line in fhandle_am:
             # The \t on the left of the line has command line meaning
-            line = tmp_line + " " + line.rstrip(" \t\n")
+            line = tmp_line + " " + line.rstrip(" \t\n") if tmp_line else line.rstrip(" \t\n")
             line = re.sub(" +", " ", line)
             tmp_line = ""
 
@@ -130,10 +137,14 @@ class AutoToolsParser(object):
                 # Remove comment line
                 line = match.group(1)
 
+            if len(line) == 0:
+                continue
+
             if line[-1] == '\\':
                 tmp_line = line[:-1]
                 continue
 
+            print line
             # Checking option status, to build option flags
             for option_regex, action in option_regexs:
                 match = option_regex.match(line)
@@ -192,7 +203,11 @@ class AutoToolsParser(object):
                             else:
                                 slices.append(other)
                                 slices.append("$({})".format(undefine_var))
+                        else:
+                            slices.append(other)
+                            slices.append("$({})".format(undefine_var))
                         with_var_line_match = with_var_line_regex.match(temp)
+                    print slices
                     slices.append(temp)
                     slices.reverse()
                     transfer_word = "".join(slices)
@@ -206,7 +221,8 @@ class AutoToolsParser(object):
             include_regex = re.compile("^include\s+(.*)")
             include_match = include_regex.match(line)
             if include_match:
-                include_path = include_match.group(1)
+                folder = os.path.sep.join(fhandle_am.name.split(os.path.sep)[:-1])
+                include_path = folder + "/" + include_match.group(1)
                 self._loading_include(am_pair_var, include_path, options, is_in_reverse)
 
     def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
@@ -223,7 +239,7 @@ class AutoToolsParser(object):
                     True: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
                     False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
                 }
-            present_dict = present_dict["option"][option][reverse_stat]
+            present_dict = present_dict["option"][option][not reverse_stat]
         return present_dict
 
     def match_check(self, line):
@@ -302,5 +318,17 @@ AS_VALUES = {
 def parse_autotools_project():
     pass
 
+
+if __name__ == "__main__":
+    make_file_am = [
+        "/home/zlion/curl/src/Makefile.am"
+    ]
+    import logging
+    import logging.config
+    logging.config.fileConfig("../conf/logging.conf")
+    logger = logging.getLogger("captureExample")
+
+    auto_tools_parser = AutoToolsParser(logger, "/home/zlion/curl", "../../result")
+    auto_tools_parser.set_makefile_am(make_file_am)
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
