@@ -25,14 +25,18 @@ header_regex = re.compile(r"AC_CONFIG_HEADERS\((.*)\)")
 subst_regex = re.compile(r"AC_SUBST\((.*)\)")
 comment_regex = re.compile(r"^#|^dnl")
 message_regex = re.compile(r"^AC_MSG_NOTICE")
+function_regex = re.compile(r"^([a-zA-Z_]+[a-zA-Z0-9_]*)$")
 
 AC_REGEX_RULES = (
     # 0. Comment line, or useless line
     # 1. The default global variable
     # 2. The output variable
+    # 3. Conditional line
+    # 4. Calling function line
     [1, macros_dir_regex, "macros_dir"],
     [1, header_regex, "header"],
     [2, subst_regex, "subst"],
+    [4, function_regex, "function"],
     [0, comment_regex],
     [0, message_regex],
 )
@@ -304,7 +308,8 @@ class AutoToolsParser(object):
             return
         self.configure_ac_info = {
             "variables": {},
-            # when program meet AC_SUBST, move variable from dict["variables"] to "export_variables"
+            # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
+            # analysis.
             "export_variables": {},
             "conditionals": {
                 # key: name of conditional witch will be use for Makefile.am conditionally compiling
@@ -410,7 +415,60 @@ class AutoToolsParser(object):
 
     def _m4_file_analysis(self, fin):
         """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
-        pass
+        func_name = None
+        quotes_stack = []
+        # for line in fin:
+        line = fin.next()
+        while line:
+            line = line.rstrip("\n \t")
+
+            function_regex = re.compile(r"^AC_DEFUN\((.*)")
+            function_match = function_regex.match(line)
+            if function_match:
+                self._m4_func_reading(fin, line)
+
+            try:
+                line = fin.next()
+            except StopIteration:
+                break
+
+    def _m4_func_reading(self, fin, present_line):
+        quotes_stack = []
+        keyword = {
+            "AC_DEFUN": None,
+        }
+        variable_regex = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+        num_regex = re.compile(r"\d+[\.]?\d*")
+        pair = ""
+        tokens = []
+        type = ""
+        while present_line:
+            for i, w in enumerate(present_line):
+                if w == ' ' or w == '\t':
+                    # 空格一般不处理, 但是pair需要保存了
+                    continue
+
+                if len(pair) == 0:
+                    pair += w
+
+                if variable_regex.match(pair):
+                    type = "var"
+                    continue
+                elif num_regex.match(pair):
+                    type = "num"
+                    continue
+                elif len(pair) == 1:
+                    if pair == '(' or pair == '[':
+                        quotes_stack.append(pair)
+                        pair = ""
+                    if pair == ')' or pair == ']':
+                        quotes_stack.pop()
+                        pair = ""
+                    if pair == ',':
+                        pass
+                else:
+                    tokens.append([pair[:-1], type])
+
 
 
 if __name__ == "__main__":
