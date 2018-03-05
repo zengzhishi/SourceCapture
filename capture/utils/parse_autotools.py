@@ -23,15 +23,30 @@ CONFIGURE_AC_NAMES = (
 macros_dir_regex = re.compile(r'^AC_CONFIG_MACRO_DIR\(\[(.*)\]\)')
 header_regex = re.compile(r"AC_CONFIG_HEADERS\((.*)\)")
 subst_regex = re.compile(r"AC_SUBST\((.*)\)")
+comment_regex = re.compile(r"^#|^dnl")
+message_regex = re.compile(r"^AC_MSG_NOTICE")
 
-REGEX_RULES = (
+AC_REGEX_RULES = (
+    # 0. Comment line, or useless line
+    # 1. The default global variable
+    # 2. The output variable
     [1, macros_dir_regex, "macros_dir"],
     [1, header_regex, "header"],
-    [1, subst_regex, "subst"],
+    [2, subst_regex, "subst"],
+    [0, comment_regex],
+    [0, message_regex],
+)
+
+function_regex = re.compile(r"AC_DEFUN\(\)")
+M4_REGEX_RULES = (
+    [],
 )
 
 assignment_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*=\s*(.*)")
 appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*(.*)")
+
+# remove [ -o ] witch maybe not present in Makefile.am flags
+filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
 
 
 def _check_undefined(slices):
@@ -116,8 +131,13 @@ class AutoToolsParser(object):
 
             self._reading_makefile_am(am_pair_var, fhandle_am)
             fhandle_am.close()
-            dump_data(self.makefile_am_info[file_path], self._output_path + "/make_file_result.json")
         return
+
+    def dump_makefile_am_info(self, output_path=None):
+        if output_path:
+            dump_data(self.makefile_am_info, output_path)
+        else:
+            dump_data(self.makefile_am_info, self._output_path + "/make_file_result.json")
 
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
         tmp_line = ""
@@ -163,7 +183,7 @@ class AutoToolsParser(object):
             append_match = appendage_regex.match(line)
             if assig_match or append_match:
                 key = assig_match.group(1) if assig_match else append_match.group(1)
-                value = assig_match.group(2) if assig_match else append_match.group(1)
+                value = assig_match.group(2) if assig_match else append_match.group(2)
 
                 if key not in am_pair_var:
                     # TODO: 如果是在全局变量的一次替换，将创建一个名称为 "default_N" 的option来存储（N可以用来存储多个,多次更改）
@@ -177,14 +197,19 @@ class AutoToolsParser(object):
                 words = split_line(value)
                 with_var_line_regex = re.compile(r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)")
 
-                present_option_dict = self._get_option_level_dict(am_pair_var[key], options, is_in_reverse)
+                present_option_dict = self._get_option_level_dict(am_pair_var[key], options, is_in_reverse,
+                                                                  True if assig_match else False)
                 present_option_dict["is_replace"] = True if assig_match else False
                 present_option_dict["defined"] = present_option_dict["defined"] if append_match else []
                 present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
 
-                for word in words:
-                    # TODO: 针对-I -inlcude 等可以在后面接空格的解析存在顺序无法保留的问题，需要对这部分进行处理
-                    temp = word
+                temp = ""
+                for (i, word) in enumerate(words):
+                    # TODO: 针对与 @ARG@ 的类型，现在还没有出来，等明确了configure.ac解析顺序之后在解析还是怎么样
+                    temp = temp + " " + word if temp else word
+                    if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+                        continue
+
                     with_var_line_match = with_var_line_regex.match(temp)
                     # slices will be a reversed list
                     slices = []
@@ -208,8 +233,8 @@ class AutoToolsParser(object):
                             slices.append(other)
                             slices.append("$({})".format(undefine_var))
                         with_var_line_match = with_var_line_regex.match(temp)
-                    print slices
                     slices.append(temp)
+                    print slices
                     slices.reverse()
                     transfer_word = "".join(slices)
                     # 获取当前的option状态
@@ -217,6 +242,8 @@ class AutoToolsParser(object):
                         present_option_dict["undefined"].append(transfer_word)
                     else:
                         present_option_dict["defined"].append(transfer_word)
+
+                    temp = ""
 
             # Loading include Makefile.inc
             include_regex = re.compile("^include\s+(.*)")
@@ -230,10 +257,27 @@ class AutoToolsParser(object):
         with open(include_path, "r") as include_fin:
             self._reading_makefile_am(am_pair_var, include_fin, options, is_in_reverse)
 
-    def _get_option_level_dict(self, start_dict, options, is_in_reverse):
+    def _check_global_dict_empty(self, dict):
+        default_n_regex = re.compile(r"default_\d+")
+        default_N = 1
+        for option_key in dict["option"].iterkeys():
+            if default_n_regex.match(option_key):
+                default_N += 1
+        if len(dict["defined"]) != 0 or len(dict["undefined"]) != 0 or len(dict["option"]) != 0:
+            return True, default_N
+        return False, 0
+
+    def _get_option_level_dict(self, start_dict, options, is_in_reverse, is_assign):
         if len(options) == 0:
             return start_dict
         present_dict = start_dict
+        has_default, default_N = self._check_global_dict_empty(present_dict)
+        if len(options) == 0 and is_assign and has_default:
+            # for default_N option, False will not be used.
+            present_dict["option"]["default_" + default_N] = {
+                True: {"defined": [], "undefined": [], "option": {}, "is_replace": True},
+                False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+            }
         for option, reverse_stat in zip(options, is_in_reverse):
             if option not in present_dict["option"]:
                 present_dict["option"][option] = {
@@ -243,46 +287,106 @@ class AutoToolsParser(object):
             present_dict = present_dict["option"][option][not reverse_stat]
         return present_dict
 
-    def match_check(self, line):
-        for pair in REGEX_RULES:
+    def _ac_match_check(self, line):
+        for pair in AC_REGEX_RULES:
             match = pair[0].match(line)
             if match:
                 self.configure_ac_info[pair[1]] = match.group(1)
                 return True
         return False
 
-    def load_configure_ac_info(self):
+    def set_configure_ac(self):
+        config_file_name = self._check_configure_scan()
+        if config_file_name:
+            self._fhandle_configure_ac = open(config_file_name, "r")
+        else:
+            self._logger.warning("Not found configure.ac or configure.in file")
+            return
+        self.configure_ac_info = {
+            "variables": {},
+            # when program meet AC_SUBST, move variable from dict["variables"] to "export_variables"
+            "export_variables": {},
+            "conditionals": {
+                # key: name of conditional witch will be use for Makefile.am conditionally compiling
+                # value: {
+                #   "option": {
+                #       True:   ...
+                #       False:  ...
+                #    }
+                # }
+            }
+        }
+        ac_variables = self.configure_ac_info["variables"]
+
+        try:
+            self._load_configure_ac_info(ac_variables)
+        except IOError:
+            self._logger.warning("Couldn't read configure.ac file")
+
+    def _load_configure_ac_info(self, ac_variables):
+        # TODO: 针对与configure.ac 及其 m4 宏的解析
+        # 1. 解析获得 m4 宏定义有哪些，构造一个引用函数表， ps: 对于搞不懂如何解析的部分直接跳过吧，不要强求
+        # 2. 引用则查函数表，如果有则解析那部分的数据，或者是先解析完，这里是拷贝解析后的数据
+        # 3. 关注的主要是：
+        #    i. 赋值语句 重点关注的是被subst的变量和默认传递变量
+        #   ii. AC_ARG_WITH 和 AC_ARG_ENABLE 关键是获取到default的方式, option的方式暂时不做详细,
+        #       重点是关注这边导致的conditional变化
+        #  iii. AC_SUBST
+
         if not self._fhandle_configure_ac:
             raise IOError("loading configure.ac or configure.in fail.")
+        option_regexs = (
+            re.compile(r"\s*if\s+test\s+")
+        )
 
         for line in self._fhandle_configure_ac:
             line = line.strip(" \n\t")
-            if self.match_check(line):
+            if self._ac_match_check(line):
                 continue
-            # Output variables for Makefile.am
-            assignment_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)=(.*)")
-            match = assignment_regex.match(line)
-            if match:
-                value = assignment_regex.match(line).group(2)
-                key = assignment_regex.match(line).group(1)
 
-    def check_configure_scan(self):
+            assign_match = assignment_regex.match(line)
+            append_match = appendage_regex.match(line)
+            if assign_match or append_match:
+                key = assign_match.group(1) if assign_match else append_match.group(1)
+                value = assign_match.group(2) if assign_match else append_match.group(2)
+                if key not in ac_variables:
+                    ac_variables[key] = {
+                        "defined": [],
+                        "undefined": [],
+                        "is_replace": False,
+                        "option": {}
+                    }
+
+    def _check_configure_scan(self):
         for file_name in CONFIGURE_AC_NAMES:
             file_path = self._project_path + os.path.sep + file_name
             if os.path.exists(file_path):
                 return file_path
         return None
 
-    def get_m4_folder(self):
+    def _preload_m4_config(self, configure_ac_filepath):
+        cmd = "fgrep \"{}\" {}".format("AC_CONFIG_MACRO_DIR", configure_ac_filepath)
+        p = subprocess.Popen(cmd, shell=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out, err = p.communicate()
+        if p.returncode == 0:
+            macros_dir_match = macros_dir_regex.match(out)
+            if not macros_dir_match:
+                self._logger.warning("Not match AC_CONFIG_MACRO_DIR in {}!".format(configure_ac_filepath))
+                m4_folders = None
+            else:
+                m4_folders = macros_dir_match.group(1)
+        else:
+            self._logger.warning("cmd: {}, exec fail!".format(cmd))
+            m4_folders = None
+        return m4_folders
+
+    def _get_m4_folder(self):
         if "macros_dir" not in self.configure_ac_info:
-            config_file_name = self.check_configure_scan()
+            config_file_name = self._check_configure_scan()
             if config_file_name:
                 self._fhandle_configure_ac = open(config_file_name, "r")
-                try:
-                    self.load_configure_ac_info()
-                except IOError:
-                    self._logger.warning("Loading configure.ac fail.")
-                    return None
+                self.configure_ac_info["macros_dir"] = self._preload_m4_config(config_file_name)
             else:
                 self._logger.warning("Not found configure.ac or configure.in file")
                 return None
@@ -291,45 +395,42 @@ class AutoToolsParser(object):
 
     def load_m4_macros(self):
         """Loading m4 files from m4 directory, and building up macros info table"""
-        m4_project = self._project_path + os.path.sep + self.get_m4_folder()
+        m4_folder_name = self._get_m4_folder()
+        if not m4_folder_name:
+            self._logger.warning("Not found m4 folder.")
+            return
+
+        m4_project = self._project_path + os.path.sep + m4_folder_name
         for file_name in os.listdir(m4_project):
             if not file_name.endswith(".m4"):
                 continue
             file_path = m4_project + os.path.sep + file_name
             with open(file_path) as m4_fin:
-                self.m4_file_analysis(m4_fin)
+                self._m4_file_analysis(m4_fin)
 
-    def m4_file_analysis(self, fin):
+    def _m4_file_analysis(self, fin):
         """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
         pass
 
 
-def getter_function(name):
-    def getvalue(autotools_parser):
-        return getattr(autotools_parser, name)
-    return getvalue
-
-
-AS_VALUES = {
-    "top_builddir": getter_function("get_build_path"),
-    "src_builddir": getter_function("get_project_path"),
-}
-
-
-def parse_autotools_project():
-    pass
-
-
 if __name__ == "__main__":
+    if len(sys.argv) == 3:
+        project_path = sys.argv[1]
+        am_path = sys.argv[2]
+    else:
+        sys.stderr.write("Fail!\n")
+        exit(-1)
+
     make_file_am = [
-        "/home/zlion/curl/src/Makefile.am"
+        am_path,
     ]
     import logging
     import logging.config
     logging.config.fileConfig("../conf/logging.conf")
     logger = logging.getLogger("captureExample")
 
-    auto_tools_parser = AutoToolsParser(logger, "/home/zlion/curl", "../../result")
+    auto_tools_parser = AutoToolsParser(logger, project_path, "../../result")
     auto_tools_parser.set_makefile_am(make_file_am)
+    auto_tools_parser.dump_makefile_am_info()
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
