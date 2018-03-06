@@ -27,6 +27,16 @@ comment_regex = re.compile(r"^#|^dnl")
 message_regex = re.compile(r"^AC_MSG_NOTICE")
 function_regex = re.compile(r"^([a-zA-Z_]+[a-zA-Z0-9_]*)$")
 
+M4_MACROS_ARGS_COUNT = {
+    # function_name, args_count
+    "AC_DEFUN": ["default", "default"],
+    "AC_MSG_CHECKING": ["str"],
+    "AC_MSG_RESULT": ["str"],
+    "AC_MSG_ERROR": ["str"],
+    "AC_COMPILE_IFELSE": ["shell", "shell", "shell"],
+    "AC_REQUIRE": ["name"]
+}
+
 AC_REGEX_RULES = (
     # 0. Comment line, or useless line
     # 1. The default global variable
@@ -415,60 +425,73 @@ class AutoToolsParser(object):
 
     def _m4_file_analysis(self, fin):
         """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
-        func_name = None
-        quotes_stack = []
-        # for line in fin:
-        line = fin.next()
-        while line:
-            line = line.rstrip("\n \t")
+        import m4_macros_analysis
+        lexer = m4_macros_analysis.M4Lexer()
+        lexer.build()
+        data = self._m4_block_reader(fin)
+        self.m4_macros_info = {
+            "function": {
+                # key: function name
+                # value: {
+                #   key: variable name
+                #   value: {defined:, undefined:, option:,}
+                # }
+            }
+        }
+        func_info = self.m4_macros_info["function"]
+        func_pos = []
+        quote_stacks = []
+        quotes = (
+            'LPAREN',
+            'LSPAREN',
+            'LBRACES',
+            'RPAREN',
+            'RSPAREN',
+            'RBRACES',
+        )
+        squotes = (
+            'LSPAREN',
+            'RSPAREN',
+        )
+        len_quotes = len(quotes)
 
-            function_regex = re.compile(r"^AC_DEFUN\((.*)")
-            function_match = function_regex.match(line)
-            if function_match:
-                self._m4_func_reading(fin, line)
+        analyze_type = "default"
+        while len(data) != 0:
+            for token in lexer.get_token_iter(data):
+                if token.type == "AC_DEFUN":
+                    func_info[token.value] = {}
+                    func_pos.append((token.value, M4_MACROS_ARGS_COUNT[token.value]))
 
+                if token.type in M4_MACROS_ARGS_COUNT:
+                    func_pos.append((token.value, M4_MACROS_ARGS_COUNT[token.value]))
+
+                # checking quote
+                if token.type in quotes[:len_quotes / 2]:
+                    quote_stacks.append(token.type)
+                elif token.type in quote_stacks[len_quotes / 2:]:
+                    quote = quote_stacks.pop()
+                    if quotes[quotes.index(quote) + len_quotes / 2] != token.type:
+                        self._logger.warning("Not match correct quote! Maybe be {} has some problem".format(fin.name))
+                        return
+                    if func_pos[-1][0] != "UNKNOWN" and token.type == "RSPAREN":
+                        func_pos[-1][1] -= 1
+                        analyze_type = M4_MACROS_ARGS_COUNT[func_pos[-1][0]][func_pos[-1][1]]
+
+
+
+
+    def _m4_block_reader(self, fin, size=1024):
+        """按行方式来逐步读取"""
+        data = ""
+        while size > 0:
             try:
                 line = fin.next()
+                size -= 1
             except StopIteration:
+                self._logger.info("Reading file: {} complete".format(fin.name))
                 break
-
-    def _m4_func_reading(self, fin, present_line):
-        quotes_stack = []
-        keyword = {
-            "AC_DEFUN": None,
-        }
-        variable_regex = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
-        num_regex = re.compile(r"\d+[\.]?\d*")
-        pair = ""
-        tokens = []
-        type = ""
-        while present_line:
-            for i, w in enumerate(present_line):
-                if w == ' ' or w == '\t':
-                    # 空格一般不处理, 但是pair需要保存了
-                    continue
-
-                if len(pair) == 0:
-                    pair += w
-
-                if variable_regex.match(pair):
-                    type = "var"
-                    continue
-                elif num_regex.match(pair):
-                    type = "num"
-                    continue
-                elif len(pair) == 1:
-                    if pair == '(' or pair == '[':
-                        quotes_stack.append(pair)
-                        pair = ""
-                    if pair == ')' or pair == ']':
-                        quotes_stack.pop()
-                        pair = ""
-                    if pair == ',':
-                        pass
-                else:
-                    tokens.append([pair[:-1], type])
-
+            data += line
+        return data
 
 
 if __name__ == "__main__":
