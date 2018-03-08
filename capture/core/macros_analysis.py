@@ -11,9 +11,9 @@
 
 import sys
 import os
-import Queue
+import queue
 import re
-import lexer_macros
+import capture.core.lexer_macros as lexer_macros
 import subprocess
 
 
@@ -24,7 +24,7 @@ class MacrosAnalyzer(object):
         #value: size(增加代码长度), {headers,}(条件编译内引入的额外头文件), {宏定义嵌套关系?}
     }
     filter_macros = []
-    queue = Queue.Queue()
+    queue = queue.Queue()
     sub_paths = []
     sys_paths = []
     compiler_type = "C"
@@ -66,7 +66,6 @@ class MacrosAnalyzer(object):
 
         comment_mark = False
         tmp_line = ""
-        print file_path
 
         for line in filein:
             line = tmp_line + " " + line.strip(" \t\n")
@@ -194,8 +193,6 @@ class MacrosAnalyzer(object):
                     # couldn't found macros include header
                     self.filter_macros.remove(key)
                     break
-        import json
-        #print json.dumps(self.filter_macros)
         line = ""
         for definition in self.filter_macros:
             line += " -D" + definition
@@ -206,6 +203,6 @@ class MacrosAnalyzer(object):
 
     def dump_macros(self):
         import json
-        print json.dumps(self.macros, indent=2)
+        print(json.dumps(self.macros, indent=2))
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

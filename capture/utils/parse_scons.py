@@ -12,7 +12,7 @@
 import os
 import subprocess
 import re
-import parse_make
+import capture.utils.parse_make as parse_make
 
 DEFAULT_SCONSTRUCT_NAME = "SConstruct"
 
@@ -67,7 +67,6 @@ def create_command_infos(logger, build_path, output, verbose_list, build_args=""
         else:
             cmd = "cd {}; scons -n {} {}=1".format(build_path, build_args, verbose)
         logger.info("try to execute command: " + cmd)
-        print cmd
         p = subprocess.Popen(cmd, shell=True,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         out, err = p.communicate()

@@ -8,6 +8,7 @@
     @LastModif: 2018-01-29 19:23:55
     @Note:
 """
+from __future__ import absolute_import
 
 import os
 import sys
@@ -15,15 +16,18 @@ import argparse
 import re
 import copy
 import subprocess
-import ConfigParser
+import configparser
 import hashlib
 import json
 
-import conf.parse_logger as parse_logger
-import source_detective
-import building_process
-import build_filter
+import capture.conf.parse_logger as parse_logger
+import capture.source_detective as source_detective
+import capture.building_process as building_process
+import capture.build_filter as build_filter
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 需要改为绝对路径
 try:
@@ -52,7 +56,7 @@ def load_compiler(config, compiler_map):
 
 
 COMPILER_COMMAND_MAP = {}
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 config.read(DEFAULT_CONFIG_FILE)
 DEFAULT_LOG_CONFIG_FILE = config.get("Default", "logging_config")
 DEFAULT_FLAGS = config.get("Default", "default_flags").split()
@@ -241,7 +245,7 @@ def file_transfer(filename, path):
     file = path + "/" + filename, "rb"
     statinfo = os.stat(file)
     if int(statinfo.st_size) / 1024 * 1024 >= 1:
-        print "File size > 1M, use big file calc"
+        logger.info("File size > 1M, use big file calc")
         return bigFileMD5Calc(file)
     return fileMD5Calc(file)
 

@@ -12,7 +12,7 @@
 import os
 import time
 import multiprocessing
-import conf.parse_logger as parse_logger
+import capture.conf.parse_logger as parse_logger
 
 
 # 默认配置
@@ -124,7 +124,6 @@ class ProcessBuilder(object):
         self._logger.info("All Process Time: %f" % (end_time - start_time))
         self._logger.info("Multiprocess mission complete...")
         return resultlist
-
 
     def mission_test(self, case):
         _queue = self._manager.QUEUE()

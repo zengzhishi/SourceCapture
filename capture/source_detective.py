@@ -4,16 +4,16 @@
 import os
 import shutil
 import subprocess
-import Queue
-import ConfigParser
+import queue
+import configparser
 
-import utils.parse_cmake as parse_cmake
-import utils.parse_make as parse_make
-import utils.parse_scons as parse_scons
-from capture import DEFAULT_CONFIG_FILE, DEFAULT_CXX_FLAGS, DEFAULT_MACROS, DEFAULT_FLAGS
+import capture.utils.parse_cmake as parse_cmake
+import capture.utils.parse_make as parse_make
+import capture.utils.parse_scons as parse_scons
+from capture.capture import DEFAULT_CONFIG_FILE, DEFAULT_CXX_FLAGS, DEFAULT_MACROS, DEFAULT_FLAGS
 
 # suffix config loading
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 config.read(DEFAULT_CONFIG_FILE)
 
 c_file_suffix_str = config.get("Default", "source_c_suffix")
@@ -77,7 +77,7 @@ def using_cmake(path, output_path, cmake_build_args=""):
         os.makedirs(build_folder_path)
 
     cmd = "cd {}; cmake {} {}".format(build_folder_path, path, cmake_build_args)
-    print "excute command: %s" % cmd
+    print("excute command: %s" % cmd)
 
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -169,7 +169,7 @@ def get_definitions(path):
 
 def autotools_project_walk(root_path, prefers):
     """目录遍历迭代器，遍历项目并获取对应的宏定义"""
-    to_walks = Queue.Queue()
+    to_walks = queue.Queue()
 
     definitions = get_definitions(root_path)
     to_walks.put((root_path, definitions))
@@ -185,7 +185,7 @@ def autotools_project_walk(root_path, prefers):
         (present_path, old_definitions) = to_walks.get()
         definitions = get_definitions(present_path)
         def_str = ""
-        print "\tscan path:" + present_path
+        print("\tscan path:" + present_path)
 
         if len(definitions) == 0:
             definitions = old_definitions
@@ -281,7 +281,7 @@ class Analyzer(object):
 
     def selective_walk(self):
         """Scan project and return present_path and files"""
-        to_walks = Queue.Queue()
+        to_walks = queue.Queue()
 
         to_walks.put(self._project_path)
 
@@ -466,7 +466,7 @@ class CMakeAnalyzer(Analyzer):
             最后一组则是对剩下的未配置源文件和头文件进行整理返回
 
         """
-        to_walks = Queue.Queue()
+        to_walks = queue.Queue()
         to_walks.put(self._project_path)
         # Mark sources have been compiled
         used_file_s_set = set()

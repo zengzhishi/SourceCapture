@@ -178,7 +178,6 @@ class AutoToolsParser(object):
                 tmp_line = line[:-1]
                 continue
 
-            print line
             # Checking option status, to build option flags
             for option_regex, action in option_regexs:
                 match = option_regex.match(line)
@@ -248,7 +247,6 @@ class AutoToolsParser(object):
                             slices.append("$({})".format(undefine_var))
                         with_var_line_match = with_var_line_regex.match(temp)
                     slices.append(temp)
-                    print slices
                     slices.reverse()
                     transfer_word = "".join(slices)
                     # 获取当前的option状态
@@ -425,7 +423,7 @@ class AutoToolsParser(object):
 
     def _m4_file_analysis(self, fin):
         """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
-        import m4_macros_analysis
+        import capture.utils.m4_macros_analysis as m4_macros_analysis
         lexer = m4_macros_analysis.M4Lexer()
         lexer.build()
         data = self._m4_block_reader(fin)

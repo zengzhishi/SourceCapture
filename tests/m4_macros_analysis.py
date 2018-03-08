@@ -99,7 +99,7 @@ class M4Lexer(object):
         return t
 
     def t_COMMENT(self, t):
-        r'^\#.*|dnl.*'
+        r'\#.*|dnl.*'
         pass    # ignore comment line
 
     def t_newline(self, t):
@@ -128,15 +128,12 @@ class M4Lexer(object):
             yield tok
 
 
-functions = {
-
-}
+functions = {}
 
 export_vars = {}
 
 # string 表示接下来的东西除了 ] 全部不管，作为一个字符串输出
 # default 表示采用默认方式解析
-# 大写的对象则表示目标是获取到这个类型的数据，且只有一个
 # bool值代表是否必须
 m4_macros_map = {
     "AC_REQUIRE": ["call_function", True],
@@ -174,9 +171,10 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
     print "# calling analysis with type: " + analysis_type + " In function: " + func_name + "\tlevel:" + str(level)
     quote_count = 0
     start_tokens = [generator.next() for _ in range(2)]
+    print start_tokens
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
-        # 双方括号的内容, 一般用来插入动态生成代码的c/c++代码段
-        # TODO: 直接跳过吧
+        # Double quote include data is code for c/c++ which is used to automatically generate new source file.
+        # So we skip them here.
         quote_count += 2
         token = generator.next()
         while quote_count != 0:
@@ -196,32 +194,32 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
     quote_count += 1
     token = generator.next()
 
-    # 括号统计，如果 < 0 则返回， 代表要收束到上一个递归
     if analysis_type == "default":
+        # Count of quotes, if quote_count == 0, it means the process main back to last recursion
         while quote_count != 0:
             print quote_count
-            print token
+            # 1. Analyze some defined function from m4_macros_map
             if token.type == "ID" and token.value in m4_macros_map:
                 print "## Start defined function analysis\tname: " + token.value
-                # 1. 解析已定义的AC|AM函数
                 check_next(generator, "LPAREN")
                 for i in xrange(len(m4_macros_map[token.value]) / 2):
-                    if i != 0:
-                        check_next(generator, "COMMA")
+                    print "comma: " + str(i)
+
                     name = m4_macros_map[token.value][i * 2]
                     is_essential = m4_macros_map[token.value][i * 2 + 1]
 
                     if is_essential:
+                        if i != 0:
+                            check_next(generator, "COMMA")
                         analyze(generator, analysis_type=name, func_name=func_name, level=level + 1)
                     else:
                         try:
                             next_token = generator.next()
+                            if next_token.type == "COMMA":
+                                next_token = generator.next()
+                            print "defined next_token: %s" % next_token
                         except StopIteration:
                             raise ParserError
-                        if name == "test":
-                            while next_token != "RSPAREN":
-                                generator.next()
-                            continue
 
                         if next_token.type != "LSPAREN":
                             generator.seek(generator.index - 1)
@@ -232,39 +230,47 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 check_next(generator, "RPAREN")
                 token = generator.next()
 
+                if token.type == "RSPAREN":
+                    break
+
             elif token.type == "ID" and re.match("^A[CM]_", token.value):
-                # 2. 解析我们没有关注的AC, AM函数, 采用默认解析
+                # 2. Analyze some undefined functions started with AC | AM.
+                #   Using "default" mode.
                 print "## Start undefined function analysis\tname: " + token.value
                 check_next(generator, "LPAREN")
                 analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
+
                 try:
                     next_token = generator.next()
+                    print "mark1: %s" % next_token
                     while next_token.type == "COMMA":
-                        print "level : %d" % level
                         analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
                         next_token = generator.next()
+                        print "markN: %s" % next_token
                 except StopIteration:
                     raise ParserError
 
                 if next_token.type != "RPAREN":
                     raise ParserError
-
                 token = generator.next()
-                print "%s ===" % token
+                if token.type == "RSPAREN":
+                    break
 
             elif token.type == "ID":
-                # 3. 解析赋值语句,去除我们不关注的行
-                print "## Start unknown line analysis"
+                # 3. Analyze some assignment line, and skip some line we don't care.
+                print "## Start unknown line analysis %s" % token
                 next_token = generator.next()
                 if next_token.type == "ASSIGN" or next_token.type == "APPEND":
                     value = cache_check_assign(generator)
+                    print value
                     if value is not None:
                         # TODO: 修改变量
                         pass
+                    token = generator.next()
                 else:
                     sub_quote_count = 0
                     lineno = token.lineno
-                    # 换行直接重新处理
+                    # When start a new line, we should end up this loop.
                     while (next_token.type != 'RSPAREN' or sub_quote_count != 0) and \
                             next_token.lineno == lineno:
                         if next_token.type in left:
@@ -275,8 +281,21 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                             next_token = generator.next()
                         except StopIteration:
                             raise ParserError
+                        print "AAA : %s" % next_token
+                        token = next_token
 
+                if token.type == "RSPAREN":
+                    break
+
+            elif token.type == "MACROS":
+                # 4. Analyze Macros assignment line.
+                print "## Start Macros line analysis %s" % token
+                line = token.value
+                macros_line = re.compile(r"")
                 token = generator.next()
+                print token
+                if token.type == "RSPAREN":
+                    break
 
             elif token.type in left:
                 quote_count += 1
@@ -285,7 +304,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 quote_count -= 1
                 token = generator.next()
             else:
-                # 4. 未定义字符
+                # 4. Start with some undefined token, we maybe skip it.
                 # TODO: 这里缺少了对 if test ... 和 case 的处理
                 token = generator.next()
 
@@ -301,6 +320,11 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 token = generator.next()
             except StopIteration:
                 raise ParserError
+
+    elif analysis_type == "test":
+        print "## Start test analysis"
+        while token.type != "RSPAREN":
+            token = generator.next()
 
     elif analysis_type == "call_function":
         if token.type == "ID":
@@ -318,19 +342,23 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 "is_replace": True,
             }
         export_vars[token.value] = 1
+        token = generator.next()
+        print token
 
     elif analysis_type == "ID_VAR":
-        # 需要后面重建
+        # TODO:需要后面重建
         export_vars[token.value] = None
+        token = generator.next()
 
-    # if token.type == "RSPAREN":
-    #     return
-    # else:
-    #     raise ParserError
-    return
+    if token.type == "RSPAREN":
+        print "### END CALLING: %s" % token
+        return
+    else:
+        raise ParserError
 
 
 def functions_analyze(generator):
+    # This function will analyze token flow and concentrates on AC_DEFUN
     while generator.has_next():
         try:
             token = generator.next()
@@ -356,16 +384,18 @@ def functions_analyze(generator):
 
 
 def cache_check_assign(generator):
+    """Assignment or appendage line analysis."""
     index = generator.index
     value = ""
     try:
-        next_tokens = [generator.next() for i in range(2)]
-        if next_tokens[0].type == "ASSIGN" and \
-            next_tokens[1].type == "DOUBLE_SEMICOLON":
+        next_token = generator.next()
+        print "======%s" % next_token
+        if next_token.type == "DOUBLE_QUOTE":
             # 赋值语句
             next_token = generator.next()
-            while next_token != '"':
+            while next_token.type != "DOUBLE_QUOTE":
                 value += " " + next_token.value
+                next_token = generator.next()
         else:
             generator.seek(index)
             return None
@@ -375,6 +405,11 @@ def cache_check_assign(generator):
 
 
 class CacheGenerator(object):
+    """
+        If we use has_next() to check next token exist, we will not meet StopIteration exception.
+        Anyway, this class is used to store history token, and provide function seek back old tokens.
+        TODO: We can add more features like getting same feature cluster.
+    """
     _max_index = 0
     _index = 0
     _caches = []
@@ -438,20 +473,14 @@ if __name__ == "__main__":
     mylexer.build()
     generator = mylexer.get_token_iter(raw_data)
     cache_generator = CacheGenerator(generator)
-    # try:
-    #     tok = cache_generator.next()
-    #     while tok:
-    #         print tok
-    #         tok = cache_generator.next()
-    # except StopIteration:
-    #     pass
     functions_analyze(cache_generator)
     import json
+
     with open("./data_func.out", "w") as fout:
         json.dump(functions, fout, indent=4)
 
-    with open("./data_var.out", "w") as fout:
-        json.dumps(export_vars, fout, indent=4)
+    with open("./data_var.out", "w") as fout2:
+        json.dump(export_vars, fout2, indent=4)
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

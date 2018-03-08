@@ -8,6 +8,7 @@ dnl type for a constant array with negative dimension.
 AC_DEFUN([CURL_CHECK_COMPILER_ARRAY_SIZE_NEGATIVE], [                                                
   AC_REQUIRE([CURL_CHECK_COMPILER_HALT_ON_ERROR])dnl
   AC_MSG_CHECKING([if compiler halts on negative sized arrays])
+  AC_SUBST([DYNLINKFLAGS], [-export-dynamic])
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([[
       typedef char bad_t[sizeof(char) == sizeof(int) ? -1 : -1 ];
@@ -20,6 +21,7 @@ AC_DEFUN([CURL_CHECK_COMPILER_ARRAY_SIZE_NEGATIVE], [
   ],[
     AC_MSG_RESULT([yes])
   ])
+  AC_MSG_CHECKING([if compiler halts on negative sized arrays])
 ])
 
 
@@ -71,13 +73,13 @@ AC_DEFUN([CURL_CHECK_COMPILER_STRUCT_MEMBER_SIZE], [
   ],[
     tst_compiler_check_two_works="yes"
   ])
-  if test "$tst_compiler_check_one_works" = "yes" &&
-    test "$tst_compiler_check_two_works" = "yes"; then
-    AC_MSG_RESULT([yes])
-  else
-    AC_MSG_RESULT([no])
-    AC_MSG_ERROR([compiler fails struct member size checking.])
-  fi
+#  if test "$tst_compiler_check_one_works" = "yes" &&
+#    test "$tst_compiler_check_two_works" = "yes"; then
+#    AC_MSG_RESULT([yes])
+#  else
+#    AC_MSG_RESULT([no])
+#    AC_MSG_ERROR([compiler fails struct member size checking.])
+#  fi
 ])
 
 AC_DEFUN([PDNS_CHECK_OS],[
@@ -88,18 +90,8 @@ AC_DEFUN([PDNS_CHECK_OS],[
   AM_CONDITIONAL([HAVE_LINUX], [test "x$have_linux" = "xyes"])
   AM_CONDITIONAL([HAVE_SOLARIS], [test "x$have_solaris" = "xyes"])
 
-  case "$host" in
-  mips* | powerpc-* )
-    AC_MSG_CHECKING([whether the linker accepts -latomic])
-    LDFLAGS="-latomic $LDFLAGS"
-    AC_LINK_IFELSE([m4_default([],[AC_LANG_PROGRAM()])],
-      [AC_MSG_RESULT([yes])],
-      [AC_MSG_ERROR([Unable to link against libatomic, cannot continue])]
-    )
-    ;;
-  esac  
 
-  AC_SUBST(THREADFLAGS)
+  AC_SUBST([THREADFLAGS])
   AC_SUBST([DYNLINKFLAGS], [-export-dynamic])
 ])
 

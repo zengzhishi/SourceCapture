@@ -1,1 +1,2 @@
-__package__ = "rebuild_compile_unit"
+
+__all__ = "rebuild_compile_unit"

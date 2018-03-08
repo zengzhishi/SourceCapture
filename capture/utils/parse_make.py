@@ -35,13 +35,11 @@ def create_data_base_infos(root_path, output, makefile_name="Makefile", make_arg
     if not os.path.exists(make_file):
         raise IOError("No Makefile in " + root_path)
 
-    cmd = "cd " + root_path + "; make -qp "
+    cmd = "make -qp "
     if make_args:
         cmd += make_args
 
-    print cmd
-
-    p = subprocess.Popen(cmd, shell=True, \
+    p = subprocess.Popen(cmd, shell=True, cwd=root_path,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
     output.writelines(out)
@@ -82,7 +80,6 @@ def analysis_block(lines):
     :return:
     """
     target_line = 0
-    print lines[0]
     # 非目标, 可能是依赖文件或内置对象
     if lines[0] == "# Not a target:":
         return {}
@@ -215,7 +212,6 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
         cmd = "cd {}; make -Bnkw -f {} {}".format(build_path, make_file, make_args)
 
     logger.info("execute command: " + cmd)
-    print cmd
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
