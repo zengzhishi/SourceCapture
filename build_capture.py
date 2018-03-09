@@ -2,11 +2,25 @@
 # -*- coding: utf-8 -*_
 """
 
-    @FileName: capture.py
+    @FileName: build_capture.py
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-23 11:27:56
     @LastModif: 2018-01-29 19:23:55
     @Note:
+    This script is the entrance of capture project.
+    There are several executing mode for choosing, if you use the default mode like:
+
+        $ python3.6 build_capture.py @project_root_path@ @result_output_path@
+
+    The default mode will automatically recognize compiler, building method, and output format.
+    For example, if your building project is using autotools, build_capture will firstly try to find Makefile. If
+      has Makefile, build_capture will use make -nkw to get original compile commands, and analyze them, finally build
+      up a compile_commands.json.
+      If there are no Makefile, just has a configure file, we can add a pre execution for it to get Makefile.
+      If execute configure fail, an analyzer will be call to analyze configure.ac, m4, and Makefile.am files, in order
+      to gain as much detail as possible.
+    Anyway, the final goal of this script is to build up compile_commands.json.
+
 """
 from __future__ import absolute_import
 
@@ -19,6 +33,7 @@ import subprocess
 import configparser
 import hashlib
 import json
+import queue
 
 import capture.conf.parse_logger as parse_logger
 import capture.source_detective as source_detective
@@ -27,7 +42,6 @@ import capture.build_filter as build_filter
 
 import logging
 
-# 需要改为绝对路径
 try:
     import redis
 except ImportError:
@@ -35,7 +49,7 @@ except ImportError:
     import redis
 
 
-# 基本配置项
+# Basic config
 DEFAULT_CONFIG_FOLDER = os.path.join("capture", "conf")
 DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_FOLDER, "capture.cfg")
 DEFAULT_COMPILER_ID = "GNU"
@@ -69,6 +83,7 @@ logger = logging.getLogger("capture")
 
 # 并发构建编译命令
 class CommandBuilder(building_process.ProcessBuilder):
+    """Multiprocess for building compile commands."""
     def redis_setting(self, host="localhost", port=6379, db=0):
         self.redis_pool = redis.ConnectionPool(host=host, port=port, db=db)
 
@@ -77,14 +92,16 @@ class CommandBuilder(building_process.ProcessBuilder):
         self.output_path = output_path
         self.generate_bitcode = generate_bitcode
 
-    def mission(self, queue, result, locks=[]):
-        lock = locks[0]
+    def mission(self, q, result):
         pid = os.getpid()
         logger.info("Process pid:%d start." % pid)
-        lock.acquire()
-        while not queue.empty():
-            job_dict = queue.get()
-            lock.release()
+        is_empty = False
+        while not is_empty:
+            try:
+                job_dict = q.get(block=True, timeout=self.timeout)
+            except queue.Empty:
+                is_empty = True
+                continue
 
             # build args
             directory = job_dict["exec_directory"]
@@ -153,23 +170,25 @@ class CommandBuilder(building_process.ProcessBuilder):
                 json_dict["command"] = output_command
                 result.append(json_dict)
 
-            lock.acquire()
-        lock.release()
-
         logger.info("Process pid:%d Complete." % pid)
         return
 
 
 class CommandExec(building_process.ProcessBuilder):
-    def mission(self, queue, result, locks=[]):
+    """Multiprocess mission for executing compile commands."""
+    def mission(self, q, result):
 
-        lock = locks[0]
         pid = os.getpid()
-        logger.info("Process pid:%d start." % pid)
-        lock.acquire()
-        while not queue.empty():
-            job_dict = queue.get()
-            lock.release()
+        parse_logger.addConsoleHandler(self._logger)
+        self._logger.warning("Process pid:%d start." % pid)
+        print(self._logger.handlers)
+        is_empty = False
+        while not is_empty:
+            try:
+                job_dict = q.get(block=True, timeout=self.timeout)
+            except queue.Empty:
+                is_empty = True
+                continue
 
             directory = job_dict["directory"]
             file = job_dict["file"]
@@ -179,26 +198,24 @@ class CommandExec(building_process.ProcessBuilder):
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
             out, err = p.communicate()
-            sys.stdout.write(" CC Building {}\n{}".format(file, out))
+            # sys.stdout.write(" CC Building {}\n{}".format(file, out))
 
+            print(self._logger.handlers)
             if p.returncode != 0:
-                logger.warning("compile: %s fail" % file)
+                self._logger.warning("compile: %s fail" % file)
             else:
-                logger.info("compile: %s success" % file)
+                self._logger.info("compile: %s success" % file)
 
-            lock.acquire()
-        lock.release()
-
-        logger.info("Process pid:%d Complete." % pid)
+        self._logger.info("Process pid:%d Complete." % pid)
         return
 
 
 def bigFileMD5Calc(file):
-    """逐步更新计算文件MD5"""
+    """Update file MD5, by reading chunk by chunk."""
     m = hashlib.md5()
     buffer = 8192   # why is 8192 | 8192 is fast than 2048
 
-    m.update(file)  # 加入文件的路径，使得不同目录即使文件内容相同，也能生成不同的MD5值
+    m.update(file)
     with open(file, 'rb') as f:
         while True:
             chunk = f.read(buffer)
@@ -211,6 +228,7 @@ def bigFileMD5Calc(file):
 
 def fileMD5Calc(file):
     """直接读取计算文件MD5"""
+    """Directly reading file content and calculate MD5."""
     m = hashlib.md5()
     m.update(file)
     with open(file, 'rb') as f:
@@ -220,14 +238,14 @@ def fileMD5Calc(file):
 
 
 def source_path_MD5Calc(file):
-    """直接计算文件路径的MD5，不考虑文件内容，只要能对文件就行重新命令即可"""
+    """Directly calculating filepath MD5, without caring content."""
     m = hashlib.md5()
     m.update(file.encode("utf8"))
     return m.hexdigest()
 
 
 def file_transfer(filename, path):
-    """文件名转换"""
+    """filename transfer"""
     file = os.path.join(path, filename)
     statinfo = os.stat(file)
     if int(statinfo.st_size) / 1024 * 1024 >= 1:
@@ -238,12 +256,12 @@ def file_transfer(filename, path):
 
 def file_args_MD5Calc(file, flags, definitions, includes, custom_arg):
     """
-    文件可能被多次编译，因此需要用编译参数加到一起来标识一个目标
+    File may be compiled multi times, so we need custom flags to identify them.
     :param file:
     :param flags:
     :param definitions:
     :param includes:
-    :param custom_arg:
+    :param custom_arg:              flags for compiling this source file.
     :return:
     """
     m = hashlib.md5()
@@ -260,19 +278,19 @@ def file_args_MD5Calc(file, flags, definitions, includes, custom_arg):
 
 
 def file_info_save(redis_instance, filename, source_path, transfer_name, definition, flags):
-    """保存源文件信息到redis中"""
     seria_data = (source_path, filename, definition, flags)
     redis_instance.set(transfer_name, json.dumps(seria_data))
     return
 
 
 def get_file_info(redis_instance, transfer_name):
-    """利用transfer_name获取源文件编译信息
+    """
+    Using transfer_name to get info for compiling.
     Returns:
-        source_path:    源文件路径
-        filename:       文件名
-        definition:     宏定义
-        flags:          编译参数
+        source_path:
+        filename:
+        definition:     macros
+        flags:
     """
     raw_data = redis_instance.get(transfer_name)
     seria_data = json.loads(raw_data)
@@ -280,10 +298,11 @@ def get_file_info(redis_instance, transfer_name):
 
 
 def commands_dump(output_path, compile_commands):
-    """导出生成的编译命令
+    """
+    Dumping compile_commands
     Args:
-        output_path:            输出路径
-        compile_commands:       最终生成的compile_commands.json文件所需要的数据
+        output_path:
+        compile_commands:       data needed for building compile_commands.json
     """
     with open(output_path, 'w') as fout:
         json.dump(compile_commands, fout, indent=4)
@@ -292,14 +311,13 @@ def commands_dump(output_path, compile_commands):
 
 def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=False):
     """
-    导出目录扫描数据,可能需要导出到redis中
-    :param output_path:             输出路径
-    :param scan_data:               项目扫描数据
+    Dump data after scanning
+    :param output_path:
+    :param scan_data:
     :param compile_commands:
-    :param saving_to_db:            是否需要保存到redis
+    :param saving_to_db:            whether need to save to redis
     :return:
     """
-
     if saving_to_db:
         pool = redis.ConnectionPool(host='localhost', port=6379, db=1)
         redis_instance = redis.Redis(connection_pool=pool)
@@ -320,7 +338,7 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
                 custom_confs["flags"].extend(custom_flags)
                 custom_confs["file"] = file
                 saving_json_line = json.dumps(custom_confs)
-                # TODO：这里是错误的做法，应该是hash之后的文件名作为key
+                # TODO： Here is false keyword, we should use hash-name instead.
                 redis_instance.set(file, saving_json_line)
 
     with open(output_path, 'w') as fout:
@@ -467,13 +485,13 @@ class CaptureBuilder(object):
             if not self.__build_path:
                 self.__build_path = os.path.join(self.__root_path, "build")
 
-            cmake_analyzer = source_detective.CMakeAnalyzer(logger, self.__root_path,
+            cmake_analyzer = source_detective.CMakeAnalyzer(self.__root_path,
                                                             self.__output_path, self.__prefers, self.__build_path)
             source_infos, include_files, files_count = cmake_analyzer.get_project_infos()
 
         elif self.__build_type == "make":
             # scan project files
-            make_analyzer = source_detective.MakeAnalyzer(logger, self.__root_path,
+            make_analyzer = source_detective.MakeAnalyzer(self.__root_path,
                                                           self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
                 make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
@@ -484,7 +502,7 @@ class CaptureBuilder(object):
                                                                                 compile_db)
 
         elif self.__build_type == "scons":
-            scons_analyzer = source_detective.SConsAnalyzer(logger, self.__root_path,
+            scons_analyzer = source_detective.SConsAnalyzer(self.__root_path,
                                                             self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
                 scons_analyzer.get_project_infos_scons(build_args=self._extra_build_args)
@@ -496,7 +514,7 @@ class CaptureBuilder(object):
 
         else:
             # 连构建脚本都没有，直接构建
-            analyzer = source_detective.Analyzer(logger, self.__root_path,
+            analyzer = source_detective.Analyzer(self.__root_path,
                                                  self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h = analyzer.get_project_infos()
             include_files = files_h
@@ -552,11 +570,9 @@ class CaptureBuilder(object):
             self.__build_path = self.__root_path
 
     def command_prebuild(self, source_infos, generate_bitcode, files_count):
-        # if len(source_infos) > 100 and files_count > 5000:
-            # 只有任务比较多的时候，构建才需要并行化
-        command_builder = CommandBuilder()
+        command_builder = CommandBuilder(timeout=1.0)
         command_builder.distribute_jobs(source_infos)
-        # setting
+        # setting basic config for process
         command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id],
                                       self.__output_path, generate_bitcode)
         command_builder.redis_setting()
@@ -582,7 +598,7 @@ class CaptureBuilder(object):
         commands.extend(bc_compile_commands)
         output_list = commands
         logger.info("All compile_commands count: %d" % len(commands))
-        build_filter_ins = build_filter.BuildFilter(logger)
+        build_filter_ins = build_filter.BuildFilter(self.__output_path)
         transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
         output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
 
@@ -590,7 +606,7 @@ class CaptureBuilder(object):
         return output_list
 
     def command_exec(self, commands):
-        command_exec = CommandExec()
+        command_exec = CommandExec(timeout=1.0)
         command_exec.distribute_jobs(commands)
         command_exec.run()
         return
@@ -673,6 +689,8 @@ def main():
 
     build_path = args.get("build_path", "")
     extra_build_args = args.get("extra_build_args", "")
+
+    # parse_logger.addConsoleHandler()
 
     if input_path is None or output_path is None:
         logger.critical("Please input project path to scan and output path.")

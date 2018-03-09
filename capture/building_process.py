@@ -9,10 +9,8 @@
     @Note: 进程池管理类
 """
 
-import os
 import time
 import multiprocessing
-import queue
 import logging
 
 logger = logging.getLogger("capture")
@@ -25,11 +23,12 @@ class ProcessBuilder(object):
     """
         使用时，先继承该类，设置logger和进程锁数目，然后需要重写mission和run函数，决定任务分配和数据的保存等。
     """
-    def __init__(self, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT):
+    def __init__(self, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT, timeout=None):
         self.process_amount = process_amount
         self._manager = multiprocessing.Manager()
-        # self._queue = self._manager.Queue()
-        self._queue = queue.Queue()
+        self._queue = self._manager.Queue()
+        # self._queue = queue.Queue()
+        self._timeout = timeout
 
         self._logger = logger
 
@@ -37,7 +36,11 @@ class ProcessBuilder(object):
             self._process_logger = logger
         self.lock = [self._manager.Lock() for i in range(lock_nums)]     # 创建指定数目的锁
 
-    def mission(self, queue, result, locks=[]):
+    @property
+    def timeout(self):
+        return self._timeout
+
+    def mission(self, queue, result):
         """多进程任务的执行"""
         pass
 
@@ -71,16 +74,6 @@ class ProcessBuilder(object):
                 ((total_count - left_count) / float(total_count) * 100.0))
         return
 
-    def mission_logger(self, pipe, logger):
-        """多进程任务执行日志打印进程"""
-        raw_massage = pipe.recv()
-        while len(raw_massage) != 1:
-            level, massage = raw_massage
-            self.log_mission(logger, level, massage)
-            raw_massage = pipe.recv()
-        self.log_mission(logger, "info", "End of logging process.")
-        return
-
     def run(self, process_log_path=None, worker_num=CPU_CORE_COUNT):
         """
             开始执行任务，建议使用multiprocessing.Process执行任务
@@ -97,7 +90,7 @@ class ProcessBuilder(object):
 
         for i in range(worker_num):
             p = multiprocessing.Process(target=self.mission,
-                                        args=(self._queue, resultlist, self.lock,))
+                                        args=(self._queue, resultlist,))
             process_list.append(p)
             p.start()
 

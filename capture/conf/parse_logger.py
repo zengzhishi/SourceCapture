@@ -9,10 +9,10 @@
     @Note:
 """
 
+import sys
 import logging
 import logging.config
-
-import sys
+from logging.handlers import RotatingFileHandler
 
 
 def get_log_level(level='debug'):
@@ -37,7 +37,7 @@ level = get_log_level()
 capture_logger = logging.getLogger("capture")
 
 console_formatter = logging.Formatter(
-    '%(message)s'
+    '??? %(message)s'
 )
 formatter = logging.Formatter(
     "%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s")
@@ -45,10 +45,15 @@ formatter = logging.Formatter(
 if level is not None:
     capture_logger.setLevel(level)
 
-if not capture_logger.handlers:
-    default_handler = logging.StreamHandler(sys.stdout)
+
+def addConsoleHandler(logger=None):
+    # if not capture_logger.handlers:
+    default_handler = logging.StreamHandler(sys.stderr)
     default_handler.setFormatter(console_formatter)
-    capture_logger.addHandler(default_handler)
+    if logger:
+        logger.addHandler(default_handler)
+    else:
+        capture_logger.addHandler(default_handler)
 
 
 def addFileHandler(filePath, logger_field="capture", format=None):
@@ -61,11 +66,13 @@ def addFileHandler(filePath, logger_field="capture", format=None):
     logger = logging.getLogger(logger_field)
 
     if filePath:
-        filehandler = logging.FileHandler(filePath, "w")
+        filehandler = RotatingFileHandler(filePath, "w")
+        level = get_log_level()
         if not format:
             filehandler.setFormatter(formatter)
         else:
             filehandler.setFormatter(format)
+        filehandler.setLevel(level)
         logger.addHandler(filehandler)
 
 
