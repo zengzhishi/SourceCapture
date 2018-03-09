@@ -151,7 +151,7 @@ class AutoToolsParser(object):
         if output_path:
             dump_data(self.makefile_am_info, output_path)
         else:
-            dump_data(self.makefile_am_info, self._output_path + "/make_file_result.json")
+            dump_data(self.makefile_am_info, os.path.join(self._project_path, "make_file_result.json"))
 
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
         tmp_line = ""
@@ -262,7 +262,7 @@ class AutoToolsParser(object):
             include_match = include_regex.match(line)
             if include_match:
                 folder = os.path.sep.join(fhandle_am.name.split(os.path.sep)[:-1])
-                include_path = folder + "/" + include_match.group(1)
+                include_path = os.path.join(folder, include_match.group(1))
                 self._loading_include(am_pair_var, include_path, options, is_in_reverse)
 
     def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
@@ -539,11 +539,11 @@ if __name__ == "__main__":
         am_path,
     ]
     import logging
-    import logging.config
-    logging.config.fileConfig("../conf/logging.conf")
-    logger = logging.getLogger("captureExample")
+    sys.path.append(os.path.join("..", "conf"))
+    import parse_logger
+    logger = logging.getLogger("capture")
 
-    auto_tools_parser = AutoToolsParser(logger, project_path, "../../result")
+    auto_tools_parser = AutoToolsParser(logger, project_path, os.path.join("..", "..", "result"))
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.dump_makefile_am_info()
 

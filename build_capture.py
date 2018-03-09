@@ -31,7 +31,7 @@ import logging
 try:
     import redis
 except ImportError:
-    sys.path.append("./utils")
+    sys.path.append(os.path.join(os.path.curdir, "utils"))
     import redis
 
 
@@ -145,9 +145,9 @@ class CommandBuilder(building_process.ProcessBuilder):
                     if job_dict["compiler_type"] == "CXX":
                         output_bitcode_command = "clang++" + output_command + "-flto "
 
-                    output_bitcode_command += "-o " + self.output_path + "/" + transfer_name + ".bc "
+                    output_bitcode_command += "-o " + os.path.join(self.output_path, transfer_name + ".bc ")
                     json_dict["bitcode_command"] = output_bitcode_command
-                output_command += "-o " + self.output_path + "/" + transfer_name + ".o "
+                output_command += "-o " + os.path.join(self.output_path, transfer_name + ".o ")
 
                 output_command = self.compile_command[job_dict["compiler_type"]] + output_command
                 json_dict["command"] = output_command
@@ -175,9 +175,7 @@ class CommandExec(building_process.ProcessBuilder):
             file = job_dict["file"]
             command = job_dict["command"]
 
-            cmd = "cd %s" % directory + "; " + command
-
-            p = subprocess.Popen(cmd, shell=True,
+            p = subprocess.Popen(command, shell=True, cwd=directory,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
             out, err = p.communicate()
@@ -230,7 +228,7 @@ def source_path_MD5Calc(file):
 
 def file_transfer(filename, path):
     """文件名转换"""
-    file = path + "/" + filename, "rb"
+    file = os.path.join(path, filename)
     statinfo = os.stat(file)
     if int(statinfo.st_size) / 1024 * 1024 >= 1:
         logger.info("File size > 1M, use big file calc")
@@ -423,7 +421,7 @@ class CaptureBuilder(object):
             source_file = command_info["file"]
             directory = command_info["directory"]
             flags = command_info["arguments"]
-            if source_file[0] != '/':
+            if os.path.isabs(source_file[0]):
                 source_file = os.path.abspath(directory + os.path.sep + source_file)
 
             # exclude prebuilded source files from project total sources
@@ -509,7 +507,7 @@ class CaptureBuilder(object):
         logger.info("End of Scaning project folders...")
 
         # dumping data
-        scan_data_dump(self.__output_path + "/project_scan_result.json", list(source_infos))
+        scan_data_dump(os.path.join(self.__output_path, "project_scan_result.json"), list(source_infos))
         return source_infos, include_files, files_count
 
     def judge_building(self):
@@ -575,8 +573,8 @@ class CaptureBuilder(object):
                 bitcode_output_list.append(bc_json_ob)
             output_list.append(json_ob)
 
-        commands_dump(self.__output_path + "/compile_commands.json", output_list)
-        commands_dump(self.__output_path + "/compile_commands_bc.json", bitcode_output_list)
+        commands_dump(os.path.join(self.__output_path, "compile_commands.json"), output_list)
+        commands_dump(os.path.join(self.__output_path, "compile_commands_bc.json"), bitcode_output_list)
         return output_list, bitcode_output_list
 
     def command_filter(self, compile_commands, bc_compile_commands, update_all=False):
@@ -680,8 +678,8 @@ def main():
         logger.critical("Please input project path to scan and output path.")
         sys.exit(-1)
 
-    if len(input_path) > 1 and input_path[-1] == '/':
-        input_path = input_path[:-1]
+    # if len(input_path) > 1 and input_path[-1] == '/':
+    #     input_path = input_path[:-1]
 
     logger_path = os.path.join(output_path, "capture.log")
     parse_logger.addFileHandler(logger_path, "capture")
@@ -699,7 +697,7 @@ def main():
         compiler_id = None
 
     # CaptureBuilder
-    capture_builder = CaptureBuilder(logger, input_path, output_path, compiler_id=compiler_id,
+    capture_builder = CaptureBuilder(input_path, output_path, compiler_id=compiler_id,
                                      prefers=prefers, build_type=build_type, build_path=build_path,
                                      extra_build_args=extra_build_args)
 
@@ -720,7 +718,7 @@ def main():
     else:
         files = list(map(lambda x: x["file"], filter_result))
         files = sorted(files)
-        with open(output_path + "/files.out", "w") as fout:
+        with open(os.path.join(output_path, "files.out"), "w") as fout:
             for file in files:
                 fout.write(file + "\n")
 

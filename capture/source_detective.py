@@ -55,7 +55,7 @@ def get_directions(path):
     """获取指定路径下的所有目录"""
     paths = []
     for one in os.listdir(path):
-        if os.path.isdir(path + "/" + one):
+        if os.path.isdir(os.path.join(path, one)):
             paths.append(one)
     return paths
 
@@ -70,11 +70,11 @@ def using_cmake(path, output_path, cmake_build_args=""):
         status:                         检查和执行的结果
         build_path:                     cmake outer_build的路径
     """
-    filename = path + os.path.sep + "CMakeLists.txt"
+    filename = os.path.join(path, "CMakeLists.txt")
     if not os.path.exists(filename):
         return False, None
 
-    build_folder_path = output_path + os.path.sep + "build"
+    build_folder_path = os.path.join(output_path, "build")
     if not os.path.exists(build_folder_path):
         os.makedirs(build_folder_path)
     else:
@@ -104,8 +104,8 @@ def check_cmake(path, project_path, cmake_build_path):
     if not cmake_build_path:
         cmake_build_path = project_path
     present_build_path = get_relative_build_path(path, project_path, cmake_build_path)
-    if os.path.exists(path + "/CMakeLists.txt") \
-            and os.path.exists(present_build_path + "/CMakeFiles"):
+    if os.path.exists(os.path.join(path, "CMakeLists.txt")) \
+            and os.path.exists(os.path.join(present_build_path, "CMakeFiles")):
         return True
     return False
 
@@ -137,20 +137,20 @@ def set_default(infos):
 
 # autotools project
 def using_autotools(path, output_path, configure_args=""):
-    filename = path + os.path.sep + "configure"
+    filename = os.path.join(path, "configure")
     if not os.path.exists(filename):
         return False, None
 
-    build_folder_path = output_path + os.path.sep + "build"
+    build_folder_path = os.path.join(output_path, "build")
     if not os.path.exists(build_folder_path):
         os.makedirs(build_folder_path)
     else:
         shutil.rmtree(build_folder_path)
         os.makedirs(build_folder_path)
 
-    cmd = "cd {}; {} {}".format(build_folder_path, filename, configure_args)
+    cmd = "{} {}".format(filename, configure_args)
 
-    p = subprocess.Popen(cmd, shell=True,
+    p = subprocess.Popen(cmd, shell=True, cwd=build_folder_path,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
     if p.returncode == 0:
@@ -182,7 +182,7 @@ def autotools_project_walk(root_path, prefers):
 
     prefer_paths = set()
     for name in prefers:
-        file_path = root_path + "/" + name
+        file_path = os.path.join(root_path, name)
         prefer_paths.add(file_path)
 
     level = 0
@@ -201,7 +201,7 @@ def autotools_project_walk(root_path, prefers):
         filelists = os.listdir(present_path)
         files = []
         for file_name in filelists:
-            file_path = present_path + "/" + file_name
+            file_path = os.path.join(present_path, file_name)
             if os.path.isdir(file_path):
                 if not level:
                     if file_path in prefer_paths:
@@ -247,11 +247,11 @@ def get_present_path_autotools(root_path, prefers):
             suffix = slice[-1]
             if len(slice) > 1:
                 if suffix in source_file_suffix:
-                    output_name_prefix = folder[root_path_length + 1:].replace("/", "_")
-                    files_s.append((folder + "/" + file_name, output_name_prefix))
+                    output_name_prefix = folder[root_path_length + 1:].replace(os.path.sep, "_")
+                    files_s.append((os.path.join(folder, file_name), output_name_prefix))
                     files_s_defs.append(definition)
                 elif suffix in include_file_suffix:
-                    files_h.append(folder + "/" + file_name)
+                    files_h.append(os.path.join(folder, file_name))
     return paths, files_s, files_h, files_s_defs
 
 
@@ -292,7 +292,7 @@ class Analyzer(object):
 
         prefer_paths = set()
         for name in self._prefers:
-            file_path = self._project_path + "/" + name
+            file_path = os.path.join(self._project_path, name)
             prefer_paths.add(file_path)
 
         level = 0
@@ -302,7 +302,7 @@ class Analyzer(object):
 
             files = []
             for file_name in os.listdir(present_path):
-                file_path = present_path + "/" + file_name
+                file_path = os.path.join(present_path, file_name)
                 if os.path.isdir(file_path):
                     if not level:
                         if file_path in prefer_paths:
@@ -328,9 +328,9 @@ class Analyzer(object):
                 suffix = slice[-1]
                 if len(slice) > 1:
                     if suffix in source_file_suffix:
-                        files_s.append(folder + "/" + file_path)
+                        files_s.append(os.path.join(folder, file_path))
                     elif suffix in include_file_suffix:
-                        files_h.append(folder + "/" + file_path)
+                        files_h.append(os.path.join(folder, file_path))
         return paths, files_s, files_h
 
 
@@ -345,7 +345,7 @@ class SConsAnalyzer(Analyzer):
                 output_path_file = "/tmp/scons_infos.txt"
                 output = open(output_path_file, "w + b")
         else:
-            output = open(self._output_path + "/scons_infos.txt", "w + b")
+            output = open(os.path.join(self._output_path, "scons_infos.txt"), "w + b")
 
         if build_args:
             output = parse_scons.create_command_infos(self._logger, self._build_path, output,
@@ -371,7 +371,7 @@ class MakeAnalyzer(Analyzer):
                 output_path_file = "/tmp/make_infos.txt"
                 output = open(output_path_file, "w + b")
         else:
-            output = open(self._output_path + "/make_infos.txt", "w + b")
+            output = open(os.path.join(self._output_path, "make_infos.txt"), "w + b")
 
         if build_args:
             output = parse_make.create_command_infos(self._logger, self._build_path, output, make_args=build_args)
@@ -402,20 +402,20 @@ class CMakeAnalyzer(Analyzer):
         else:
             final_build_path = self._project_path
         present_build_path = get_relative_build_path(present_path, self._project_path, final_build_path)
-        cmake_files_path = present_build_path + "/CMakeFiles"
+        cmake_files_path = os.path.join(present_build_path, "CMakeFiles")
         info_list = []
 
         def _get_abs_path(path):
-            if path[0] == "/":
+            if os.path.isabs(path[0]):
                 return path
-            return os.path.abspath(final_build_path + "/" + path)
+            return os.path.abspath(os.path.join(final_build_path, path))
 
         for file_name in os.listdir(cmake_files_path):
-            file_path = cmake_files_path + "/" + file_name
+            file_path = os.path.join(cmake_files_path, file_name)
             if os.path.isdir(file_path) and check_cmake_exec_dest_dirname(file_name):
                 # 目标目录
-                flags_file = file_path + "/flags.make"
-                depend_file = file_path + "/DependInfo.cmake"
+                flags_file = os.path.join(file_path, "flags.make")
+                depend_file = os.path.join(file_path, "DependInfo.cmake")
                 if os.path.exists(flags_file) and os.path.exists(depend_file):
                     cmake_infos = parse_cmake.parse_cmakeInfo(depend_file)
                     origin_flags, origin_custom_flags, origin_custom_definitions = parse_cmake.parse_flags(flags_file)
@@ -480,7 +480,7 @@ class CMakeAnalyzer(Analyzer):
         # Add prefer folders
         prefer_paths = set()
         for name in self._prefers:
-            file_path = self._project_path + "/" + name
+            file_path = os.path.join(self._project_path, name)
             prefer_paths.add(file_path)
 
         level = 0
@@ -506,8 +506,7 @@ class CMakeAnalyzer(Analyzer):
                 yield info_list
 
             for file_name in os.listdir(present_path):
-                file_path = present_path + "/" + file_name
-                file_path = os.path.abspath(file_path)
+                file_path = os.path.abspath(os.path.join(present_path, file_name))
                 if os.path.isdir(file_path):
                     if not level:
                         if file_path in prefer_paths:

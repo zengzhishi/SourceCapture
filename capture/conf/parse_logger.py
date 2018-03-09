@@ -37,7 +37,7 @@ level = get_log_level()
 capture_logger = logging.getLogger("capture")
 
 console_formatter = logging.Formatter(
-    '[%(levelname)-7s] %(message)s'
+    '%(message)s'
 )
 formatter = logging.Formatter(
     "%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s")

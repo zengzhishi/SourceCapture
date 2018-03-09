@@ -47,7 +47,7 @@ class MacrosAnalyzer(object):
                 cmd = 'echo | gcc -Wp,-v -x c++ - -fsyntax-only 2>&1 | grep "^\ /"'
             else:
                 raise Exception("Unknown compiler type!")
-            p = subprocess.Popen(cmd, shell=True, \
+            p = subprocess.Popen(cmd, shell=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             out, err = p.communicate()
             lines = out.split()

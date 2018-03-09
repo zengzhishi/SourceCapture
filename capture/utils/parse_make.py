@@ -129,7 +129,7 @@ def print_info_analysis(output_path, targets=None):
     :param targets: 如果为None, 则默认把所有非伪目标的编译命令参数都获取回来
     :return:
     """
-    fin = open(output_path + "/make_info.txt", "r")
+    fin = open(os.path.join(output_path, "make_info.txt"), "r")
     all_need_params = []
     all_params_dicts = []
     line = fin.readline()
@@ -207,12 +207,12 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
         raise
 
     if is_exist:
-        cmd = "cd {}; make -Bnkw {}".format(build_path, make_args)
+        cmd = "make -Bnkw {}".format(make_args)
     else:
-        cmd = "cd {}; make -Bnkw -f {} {}".format(build_path, make_file, make_args)
+        cmd = "make -Bnkw -f {} {}".format(make_file, make_args)
 
     logger.info("execute command: " + cmd)
-    p = subprocess.Popen(cmd, shell=True,
+    p = subprocess.Popen(cmd, shell=True, cwd=build_path,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
     output.writelines(out)
@@ -265,8 +265,8 @@ def strip_quotes(s):
 
 def excute_quote_code(s, build_dir):
     s_regax = re.match("`(.*)`(.*)", s)
-    excute_cmd = "cd {}; {}".format(build_dir, s_regax.group(1))
-    p = subprocess.Popen(excute_cmd, shell=True,
+    excute_cmd = s_regax.group(1)
+    p = subprocess.Popen(excute_cmd, shell=True, cwd=build_dir,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
     value = out.strip("\n") + s_regax.group(2)
@@ -378,7 +378,7 @@ def parse_flags(logger, build_log_in, build_dir,
                         for (i, quetos_word) in enumerate(quetos_words):
                             if quetos_word[i] in filename_flags and quetos_word[1][0] != '-':
                                 w = quetos_words[i + 1]
-                                if w[0] == '/':
+                                if os.path.isabs(w[0]):
                                     p = w
                                 else:
                                     p = os.path.abspath(working_dir + os.path.sep + w)
@@ -391,7 +391,7 @@ def parse_flags(logger, build_log_in, build_dir,
                         if word_strip_quotes.startswith("-I"):
                             opt = word[0:2]
                             val = word[2:]
-                            if val[0] == '/':
+                            if os.path.isabs(val[0]):
                                 p = val
                             else:
                                 p = os.path.abspath(working_dir + os.path.sep + val)
@@ -412,7 +412,7 @@ def parse_flags(logger, build_log_in, build_dir,
             if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                if w[0] == '/' or words[i] == "-include":
+                if os.path.isabs(w[0]) or words[i] == "-include":
                     p = w
                 else:
                     p = os.path.abspath(working_dir + os.path.sep + w)
@@ -426,7 +426,7 @@ def parse_flags(logger, build_log_in, build_dir,
                     opt = word[0:2]
                     val = word[2:]
                     # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
-                    if val[0] == '/':
+                    if os.path.isabs(val[0]):
                         p = val
                     else:
                         p = os.path.abspath(working_dir + os.path.sep + val)
