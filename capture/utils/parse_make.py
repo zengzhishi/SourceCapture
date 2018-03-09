@@ -13,6 +13,8 @@ import os
 import re
 import subprocess
 
+import logging
+logger = logging.getLogger("capture")
 
 DEFAULT_MAKEFILE_NAME = [
     "Makefile",
@@ -198,7 +200,7 @@ def check_makefile(build_path, makefile_name=None):
 
 
 # 使用 make -Bnkw 方式获取编译命令的方法
-def create_command_infos(logger, build_path, output, makefile_name=None,
+def create_command_infos(build_path, output, makefile_name=None,
                  make_args=""):
     make_file = makefile_name
     try:
@@ -273,7 +275,7 @@ def excute_quote_code(s, build_dir):
     return value
 
 
-def parse_flags(logger, build_log_in, build_dir,
+def parse_flags(build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     skip_count = 0
     # Setting compiler regex string
@@ -365,10 +367,10 @@ def parse_flags(logger, build_log_in, build_dir,
             if word == "-c":
                 continue
 
-            if (file_regex.match(word)):
+            if file_regex.match(word):
                 filepath = word
 
-            if(word[0] != '-' or not flags_whitelist.match(word)):
+            if word[0] != '-' or not flags_whitelist.match(word):
                 # phony target
                 word_strip_quotes = strip_quotes(word)
                 if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
@@ -409,7 +411,7 @@ def parse_flags(logger, build_log_in, build_dir,
                 continue
 
             # include arguments for this option, if there are any, as a tuple
-            if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
+            if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
                 if os.path.isabs(w[0]) or words[i] == "-include":

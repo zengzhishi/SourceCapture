@@ -14,6 +14,11 @@ import os
 import sys
 import re
 
+import logging
+sys.path.append(os.path.join("..", "conf"))
+import parse_logger
+logger = logging.getLogger("capture")
+
 
 CONFIGURE_AC_NAMES = (
     "configure.ac",
@@ -109,8 +114,7 @@ class AutoToolsParser(object):
     m4_macros_info = {}
     makefile_am_info = {}
 
-    def __init__(self, logger, project_path, output_path, build_path=None):
-        self._logger = logger
+    def __init__(self, project_path, output_path, build_path=None):
         self._project_path = project_path
         self._output_path = output_path
 
@@ -538,12 +542,7 @@ if __name__ == "__main__":
     make_file_am = [
         am_path,
     ]
-    import logging
-    sys.path.append(os.path.join("..", "conf"))
-    import parse_logger
-    logger = logging.getLogger("capture")
-
-    auto_tools_parser = AutoToolsParser(logger, project_path, os.path.join("..", "..", "result"))
+    auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.dump_makefile_am_info()
 

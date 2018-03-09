@@ -11,6 +11,9 @@ import capture.utils.parse_cmake as parse_cmake
 import capture.utils.parse_make as parse_make
 import capture.utils.parse_scons as parse_scons
 
+import logging
+logger = logging.getLogger("capture")
+
 DEFAULT_CONFIG_FILE = os.path.join("capture", "conf", "capture.cfg")
 
 # suffix config loading
@@ -277,8 +280,7 @@ def using_scons(path):
 
 
 class Analyzer(object):
-    def __init__(self, logger, root_path, output_path, prefers, build_path=None):
-        self._logger = logger
+    def __init__(self, root_path, output_path, prefers, build_path=None):
         self._project_path = root_path
         self._output_path = output_path
         self._prefers = prefers
@@ -298,7 +300,7 @@ class Analyzer(object):
         level = 0
         while not to_walks.empty():
             present_path = to_walks.get()
-            self._logger.info("\tscan path: %s" % present_path)
+            logger.info("\tscan path: %s" % present_path)
 
             files = []
             for file_name in os.listdir(present_path):
@@ -355,7 +357,7 @@ class SConsAnalyzer(Analyzer):
         output.seek(0)
         line_count, skip_count, compile_db = parse_scons.parse_flags(self._logger, output, self._build_path)
         output.close()
-        self._logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" % \
+        logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" % \
                     (line_count, skip_count))
         return paths, files_s, files_h, compile_db
 
@@ -374,13 +376,13 @@ class MakeAnalyzer(Analyzer):
             output = open(os.path.join(self._output_path, "make_infos.txt"), "w + b")
 
         if build_args:
-            output = parse_make.create_command_infos(self._logger, self._build_path, output, make_args=build_args)
+            output = parse_make.create_command_infos(self._build_path, output, make_args=build_args)
         else:
-            output = parse_make.create_command_infos(self._logger, self._build_path, output)
+            output = parse_make.create_command_infos(self._build_path, output)
         output.seek(0)
-        line_count, skip_count, compile_db = parse_make.parse_flags(self._logger, output, self._build_path)
+        line_count, skip_count, compile_db = parse_make.parse_flags(output, self._build_path)
         output.close()
-        self._logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" % \
+        logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" % \
                     (line_count, skip_count))
 
         return paths, files_s, files_h, compile_db
@@ -488,7 +490,7 @@ class CMakeAnalyzer(Analyzer):
         while not to_walks.empty():
             present_path = to_walks.get()
             if check_cmake(present_path, self._project_path, self._build_path):
-                self._logger.info("\tscan path: %s" % present_path)
+                logger.info("\tscan path: %s" % present_path)
                 info_list = self.get_cmake_info(present_path)
                 if self._build_path:
                     exec_path = self._build_path

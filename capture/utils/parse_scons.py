@@ -13,7 +13,10 @@ import os
 import subprocess
 import re
 import capture.utils.parse_make as parse_make
+import logging
 
+
+logger = logging.getLogger("capture")
 DEFAULT_SCONSTRUCT_NAME = "SConstruct"
 
 
@@ -54,7 +57,7 @@ def check_sconstruct_exist(build_path):
     return os.path.exists(build_file)
 
 
-def create_command_infos(logger, build_path, output, verbose_list, build_args=""):
+def create_command_infos(build_path, output, verbose_list, build_args=""):
     is_exist = check_sconstruct_exist(build_path)
     if not is_exist:
         raise IOError("No SConstruct in " + build_path)
@@ -84,7 +87,7 @@ def create_command_infos(logger, build_path, output, verbose_list, build_args=""
 def parse_flags(logger, build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     """Compiler commands analysis may be similar process with make -n"""
-    return parse_make.parse_flags(logger, build_log_in, build_dir,
+    return parse_make.parse_flags(build_log_in, build_dir,
                                   other_cc_compiles, other_cxx_compiles)
 
 

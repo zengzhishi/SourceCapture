@@ -1,8 +1,8 @@
 # !/bin/env python
 # -*- coding: utf-8 -*_
 
-import rebuild_compile_unit.capture.core.macros_analysis as macros_analysis
-import rebuild_compile_unit.capture.source_detective as source_detective
+import capture.core.macros_analysis as macros_analysis
+import capture.source_detective as source_detective
 import subprocess
 import sys
 
@@ -17,7 +17,7 @@ if mode == '0':
     ma = macros_analysis.MacrosAnalyzer(file_path, sub_folders)
     ma.start_building_macros()
     definitions_flags = ma.exclude_macros()
-    print definitions_flags
+    print(definitions_flags)
     ma.dump_macros()
 
 elif mode == '1':
@@ -28,7 +28,7 @@ elif mode == '1':
         include_flags += " -I" + sub_folder
 
     times = 0
-    print "file count: %d" % len(files_s)
+    print("file count: %d" % len(files_s))
     for file_s in files_s:
         ma = macros_analysis.MacrosAnalyzer(file_s, sub_folders)
         ma.start_building_macros()
@@ -40,7 +40,7 @@ elif mode == '1':
         out, err = p.communicate()
 
         if p.returncode != 0:
-            print " CC Building: {}, fail".format(file_s)
+            print(" CC Building: {}, fail".format(file_s))
             times += 1
 
-    print "fail times: %d" % times
+    print("fail times: %d" % times)
