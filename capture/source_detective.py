@@ -10,11 +10,16 @@ import configparser
 import capture.utils.parse_cmake as parse_cmake
 import capture.utils.parse_make as parse_make
 import capture.utils.parse_scons as parse_scons
-from capture.capture import DEFAULT_CONFIG_FILE, DEFAULT_CXX_FLAGS, DEFAULT_MACROS, DEFAULT_FLAGS
+
+DEFAULT_CONFIG_FILE = os.path.join("capture", "conf", "capture.cfg")
 
 # suffix config loading
 config = configparser.ConfigParser()
 config.read(DEFAULT_CONFIG_FILE)
+
+DEFAULT_FLAGS = config.get("Default", "default_flags").split()
+DEFAULT_MACROS = config.get("Default", "default_macros").split(",")
+DEFAULT_CXX_FLAGS = config.get("Default", "default_cxx_flags").split()
 
 c_file_suffix_str = config.get("Default", "source_c_suffix")
 cxx_file_suffix_str = config.get("Default", "source_cxx_suffix")
@@ -434,10 +439,10 @@ class CMakeAnalyzer(Analyzer):
                                 index = depend_s_files.index(source_file_path)
                                 custom_definitions[index] = origin_custom_definitions[key]
                         info_list.append({
-                            "source_files": depend_s_files,
+                            "source_files": list(depend_s_files),
                             "flags": flags,
                             "definitions": definitions,
-                            "includes": includes,
+                            "includes": list(includes),
                             "compiler_type": compiler_type,
                             "custom_flags": custom_flags,
                             "custom_definitions": custom_definitions
@@ -553,8 +558,9 @@ class CMakeAnalyzer(Analyzer):
             "custom_definitions": [],
         }
         for info_list in self.selective_walk():
+            info_list = list(info_list)
             for info in info_list:
-                if len(info["source_files"]) == 0:
+                if len(list(info["source_files"])) == 0:
                     continue
                 if not info["compiler_type"]:
                     set_default(info)

@@ -8,11 +8,17 @@
     @LastModif: 2018-03-06 20:12:02
     @Note:
 """
+from __future__ import absolute_import
+
 import sys
 import ply.lex as lex
 import re
 import types
-from ply.lex import TOKEN
+import logging
+
+sys.path.append("../capture/conf")
+import parse_logger
+logger = logging.getLogger("capture")
 
 
 # TODO: 对于其他的语法不做关注，只关注变量的变化，和某些语句，如AC_SUBST， AC_CONDITIONAL等导出环境的语句
@@ -95,7 +101,7 @@ class M4Lexer(object):
 
     def t_MACROS(self, t):
         r'.*\=.*\-D\$?\(?[a-zA-Z_][a-zA-Z0-9_].*'
-        print "macros line: {}".format(t.value)
+        print("macros line: {}".format(t.value))
         return t
 
     def t_COMMENT(self, t):
@@ -112,7 +118,7 @@ class M4Lexer(object):
         return t
 
     def t_error(self, t):
-        print "Illegal character '%s'" % t.value[0]
+        print("Illegal character '%s'" % t.value[0])
         t.lexer.skip(1)
 
     # Build the lexer
@@ -132,9 +138,15 @@ functions = {}
 
 export_vars = {}
 
-# string 表示接下来的东西除了 ] 全部不管，作为一个字符串输出
-# default 表示采用默认方式解析
-# bool值代表是否必须
+export_conditions = {}
+
+# string: Means that we don't care about content, just concentrate on ']'
+# default: Using default method to analyze token flow.
+# call_function: Means that we will calling other function here.
+# ID_VAR & ID_VAR: Means the field content one ID. ID_VAR will export variable, ID_ENV will export condition.
+
+# The bool value represent whether this field is essential.
+# TODO: 拓展表格，加入可能会出现的 IFELSE 宏定义函数，这种情况的话应该作为option来处理, 条件解析不出来就直接构建一个随机不重复的条件
 m4_macros_map = {
     "AC_REQUIRE": ["call_function", True],
     "AC_MSG_CHECKING": ["string", True],
@@ -148,6 +160,9 @@ left = ['LPAREN', 'LSPAREN', 'LBRACES',]
 right = ['RPAREN', 'RSPAREN', 'RBRACES',]
 
 
+filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
+
+
 def check_next(generator, string):
     try:
         token = generator.next()
@@ -156,6 +171,33 @@ def check_next(generator, string):
     if token.type == string:
         return True
     raise ParserError
+
+
+def try_next(generator, string):
+    if not generator.has_next():
+        return False
+    token = generator.next()
+    if token.type == string:
+        return True
+    generator.seek(generator.index - 1)
+    return False
+
+
+def _check_undefined(slices):
+    for slice in slices:
+        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice):
+            return True
+    return False
+
+
+def _check_undefined_self(slices, self_var):
+    for slice in slices:
+        search = re.search(r"\$\(?([a-zA-Z_][a-zA-Z0-9_]*)\)?", slice)
+        if search:
+            append_var = search.group(1)
+            if append_var == self_var:
+                return True
+    return False
 
 
 # 代表没有解析到目标的token，解析异常
@@ -168,10 +210,9 @@ class ParserError(Exception):
 
 
 def analyze(generator, analysis_type="default", func_name=None, level=0):
-    print "# calling analysis with type: " + analysis_type + " In function: " + func_name + "\tlevel:" + str(level)
+    logger.info("# calling analysis with type: " + analysis_type + " In function: " + func_name + "\tlevel:" + str(level))
     quote_count = 0
     start_tokens = [generator.next() for _ in range(2)]
-    print start_tokens
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
         # Double quote include data is code for c/c++ which is used to automatically generate new source file.
         # So we skip them here.
@@ -197,14 +238,11 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
     if analysis_type == "default":
         # Count of quotes, if quote_count == 0, it means the process main back to last recursion
         while quote_count != 0:
-            print quote_count
             # 1. Analyze some defined function from m4_macros_map
             if token.type == "ID" and token.value in m4_macros_map:
-                print "## Start defined function analysis\tname: " + token.value
+                logger.info("## Start defined function analysis\tname: " + token.value)
                 check_next(generator, "LPAREN")
-                for i in xrange(len(m4_macros_map[token.value]) / 2):
-                    print "comma: " + str(i)
-
+                for i in range(len(m4_macros_map[token.value]) / 2):
                     name = m4_macros_map[token.value][i * 2]
                     is_essential = m4_macros_map[token.value][i * 2 + 1]
 
@@ -217,7 +255,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                             next_token = generator.next()
                             if next_token.type == "COMMA":
                                 next_token = generator.next()
-                            print "defined next_token: %s" % next_token
+                            logger.info("defined next_token: %s" % next_token)
                         except StopIteration:
                             raise ParserError
 
@@ -236,17 +274,15 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
             elif token.type == "ID" and re.match("^A[CM]_", token.value):
                 # 2. Analyze some undefined functions started with AC | AM.
                 #   Using "default" mode.
-                print "## Start undefined function analysis\tname: " + token.value
+                logger.info("## Start undefined function analysis\tname: " + token.value)
                 check_next(generator, "LPAREN")
                 analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
 
                 try:
                     next_token = generator.next()
-                    print "mark1: %s" % next_token
                     while next_token.type == "COMMA":
                         analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
                         next_token = generator.next()
-                        print "markN: %s" % next_token
                 except StopIteration:
                     raise ParserError
 
@@ -258,11 +294,10 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
 
             elif token.type == "ID":
                 # 3. Analyze some assignment line, and skip some line we don't care.
-                print "## Start unknown line analysis %s" % token
+                logger.info("## Start unknown line analysis %s" % token)
                 next_token = generator.next()
                 if next_token.type == "ASSIGN" or next_token.type == "APPEND":
                     value = cache_check_assign(generator)
-                    print value
                     if value is not None:
                         # TODO: 修改变量
                         pass
@@ -281,7 +316,6 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                             next_token = generator.next()
                         except StopIteration:
                             raise ParserError
-                        print "AAA : %s" % next_token
                         token = next_token
 
                 if token.type == "RSPAREN":
@@ -289,13 +323,80 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
 
             elif token.type == "MACROS":
                 # 4. Analyze Macros assignment line.
-                print "## Start Macros line analysis %s" % token
+                logger.info("## Start Macros line analysis %s" % token)
                 line = token.value
-                macros_line = re.compile(r"")
+
+                macros_assignment_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\"?([^\"]*)\"?")
+                macros_appendage_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\+=\s*\"?([^\"]*)\"?")
+                with_var_line_regex = re.compile(r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)")
+
+                assign_match = macros_assignment_line_regex.match(line)
+                append_match = macros_appendage_line_regex.match(line)
+                variables = functions[func_name]["variables"]
+                if assign_match or append_match:
+                    var = assign_match.group(1) if assign_match else append_match.group(1)
+                    value = assign_match.group(2) if assign_match else append_match.group(2)
+                    if var not in variables:
+                        variables[var] = {
+                            "defined": [],
+                            "undefined": [],
+                            "option": [],
+                            "is_replace": True if assign_match else False
+                        }
+
+                    words = split_line(value)
+                    temp = ""
+                    for (i, word) in enumerate(words):
+                        temp = temp + " " + word if temp else word
+                        if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+                            continue
+
+                        with_var_line_match = with_var_line_regex.match(temp)
+                        slices = []
+                        while with_var_line_match:
+                            temp = with_var_line_match.group(1)
+                            undefine_var = with_var_line_match.group(2)
+                            other = with_var_line_match.group(3)
+                            if undefine_var in variables:
+                                value = variables[undefine_var]
+                                if len(value["undefined"]) == 0 and value["option"] is None:
+                                    undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
+                                    temp = temp + undefine_var + other
+                                elif value["option"] is None:
+                                    slices.append(other)
+                                    slices.append(value["defined"])
+                                    slices.append(value["undefined"])
+                                else:
+                                    slices.append(other)
+                                    slices.append("$({})".format(undefine_var))
+                            else:
+                                slices.append(other)
+                                slices.append("$({})".format(undefine_var))
+                            with_var_line_match = with_var_line_regex.match(temp)
+
+                        slices.append(temp)
+                        slices.reverse()
+                        transfer_word = "".join(slices)
+                        # TODO: 尚未添加 option 的处理
+                        if _check_undefined(slices):
+                            if _check_undefined(slices):
+                                variables[var]["is_replace"] = False
+                                if len(slices) == 1:
+                                    temp = ""
+                                    continue
+                            variables[var]["undefined"].append(transfer_word)
+                        else:
+                            variables[var]["defined"].append(transfer_word)
+
+                        temp = ""
+
                 token = generator.next()
-                print token
                 if token.type == "RSPAREN":
                     break
+
+            # elif token.type == "if":
+            #     check_next(generator, "test")
+            #     next_token = generator.next()
 
             elif token.type in left:
                 quote_count += 1
@@ -309,7 +410,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 token = generator.next()
 
     elif analysis_type == "string":
-        print "## Start string analysis"
+        logger.info("## Start string analysis")
         quote_count = 0
         while token.type != "RSPAREN" or quote_count != 0:
             if token.type in left:
@@ -322,7 +423,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 raise ParserError
 
     elif analysis_type == "test":
-        print "## Start test analysis"
+        logger.info("## Start test analysis")
         while token.type != "RSPAREN":
             token = generator.next()
 
@@ -341,17 +442,21 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                 "option": [],
                 "is_replace": True,
             }
-        export_vars[token.value] = 1
+        export_conditions[token.value] = 1
         token = generator.next()
-        print token
 
     elif analysis_type == "ID_VAR":
         # TODO:需要后面重建
-        export_vars[token.value] = None
+        export_vars[token.value] = {
+            "defined": [],
+            "undefined": [],
+            "option": [],
+            "is_replace": True
+        }
         token = generator.next()
 
     if token.type == "RSPAREN":
-        print "### END CALLING: %s" % token
+        logger.info("### END CALLING: %s" % token)
         return
     else:
         raise ParserError
@@ -389,7 +494,6 @@ def cache_check_assign(generator):
     value = ""
     try:
         next_token = generator.next()
-        print "======%s" % next_token
         if next_token.type == "DOUBLE_QUOTE":
             # 赋值语句
             next_token = generator.next()
@@ -402,6 +506,41 @@ def cache_check_assign(generator):
         return value
     except StopIteration:
         raise ParserError
+
+
+def split_line(line):
+    # Pass 1: split line using whitespace
+    words = line.strip().split()
+    # Pass 2: merge words so that the no. of quotes is balanced
+    res = []
+    for w in words:
+        if len(res) > 0 and unbalanced_quotes(res[-1]):
+            res[-1] += " " + w
+        else:
+            res.append(w)
+    return res
+
+
+def unbalanced_quotes(s):
+    single = 0
+    double = 0
+    excute = 0
+    for c in s:
+        if c == "'":
+            single += 1
+        elif c == '"':
+            double += 1
+        if c == "`":
+            excute += 1
+
+    # 去除转义后的引号带来的影响
+    move_double = s.count('\\"')
+    move_single = s.count("\\'")
+    single -= move_single
+    double -= move_double
+
+    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
+    return is_half_quote
 
 
 class CacheGenerator(object):
@@ -448,6 +587,7 @@ class CacheGenerator(object):
         data = self._caches[self._index - 1]
         self._index += 1
         self._set_max()
+        print(data)
         return data
 
     def seek(self, index=0):

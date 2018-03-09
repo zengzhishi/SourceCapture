@@ -153,7 +153,7 @@ def parse_cmakeInfo(depen_file):
     fin = open(depen_file, 'r')
     config_dict = set_analysis(fin)
 
-    if type(config_dict["CMAKE_DEPENDS_LANGUAGES"]) == types.ListType:
+    if isinstance(config_dict["CMAKE_DEPENDS_LANGUAGES"], list):
         compiler_type = config_dict["CMAKE_DEPENDS_LANGUAGES"]
     else:
         compiler_type = (config_dict["CMAKE_DEPENDS_LANGUAGES"],)

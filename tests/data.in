@@ -73,13 +73,13 @@ AC_DEFUN([CURL_CHECK_COMPILER_STRUCT_MEMBER_SIZE], [
   ],[
     tst_compiler_check_two_works="yes"
   ])
-#  if test "$tst_compiler_check_one_works" = "yes" &&
-#    test "$tst_compiler_check_two_works" = "yes"; then
-#    AC_MSG_RESULT([yes])
-#  else
-#    AC_MSG_RESULT([no])
-#    AC_MSG_ERROR([compiler fails struct member size checking.])
-#  fi
+  if test "$tst_compiler_check_one_works" = "yes" &&
+    test "$tst_compiler_check_two_works" = "yes"; then
+    AC_MSG_RESULT([yes])
+  else
+    AC_MSG_RESULT([no])
+    AC_MSG_ERROR([compiler fails struct member size checking.])
+  fi
 ])
 
 AC_DEFUN([PDNS_CHECK_OS],[

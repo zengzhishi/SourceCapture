@@ -12,8 +12,64 @@
 import logging
 import logging.config
 
+import sys
 
-def getLogger(conf, logger_field="captureExample", new_output=None):
+
+def get_log_level(level='debug'):
+    """
+    Set the log level for python Bokeh code.
+
+    :param level:
+    :return:
+    """
+    LEVELS = {
+        'debug': logging.DEBUG,
+        'info': logging.INFO,
+        'warn': logging.WARNING,
+        'error': logging.ERROR,
+        'fatal': logging.CRITICAL,
+        'none': None
+    }
+    return LEVELS[level]
+
+
+level = get_log_level()
+capture_logger = logging.getLogger("capture")
+
+console_formatter = logging.Formatter(
+    '[%(levelname)-7s] %(message)s'
+)
+formatter = logging.Formatter(
+    "%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s")
+
+if level is not None:
+    capture_logger.setLevel(level)
+
+if not capture_logger.handlers:
+    default_handler = logging.StreamHandler(sys.stdout)
+    default_handler.setFormatter(console_formatter)
+    capture_logger.addHandler(default_handler)
+
+
+def addFileHandler(filePath, logger_field="capture", format=None):
+    """
+    Config logging.
+
+    logger_field:           logger_name
+    format:                 formatter for
+    """
+    logger = logging.getLogger(logger_field)
+
+    if filePath:
+        filehandler = logging.FileHandler(filePath, "w")
+        if not format:
+            filehandler.setFormatter(formatter)
+        else:
+            filehandler.setFormatter(format)
+        logger.addHandler(filehandler)
+
+
+def getLogger(conf, logger_field="capture", new_output=None):
     """
     Config logging.
 

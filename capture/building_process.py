@@ -12,8 +12,10 @@
 import os
 import time
 import multiprocessing
-import capture.conf.parse_logger as parse_logger
+import queue
+import logging
 
+logger = logging.getLogger("capture")
 
 # 默认配置
 CPU_CORE_COUNT = multiprocessing.cpu_count()
@@ -23,37 +25,21 @@ class ProcessBuilder(object):
     """
         使用时，先继承该类，设置logger和进程锁数目，然后需要重写mission和run函数，决定任务分配和数据的保存等。
     """
-    def __init__(self, logger=None, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT):
+    def __init__(self, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT):
         self.process_amount = process_amount
         self._manager = multiprocessing.Manager()
-        self._queue = self._manager.Queue()
+        # self._queue = self._manager.Queue()
+        self._queue = queue.Queue()
 
-        if logger is None:
-            logger = self._logger_config()
         self._logger = logger
 
         if process_logger is None:
             self._process_logger = logger
         self.lock = [self._manager.Lock() for i in range(lock_nums)]     # 创建指定数目的锁
 
-    def _logger_config(self, process_log_path=None):
-        try:
-            logger_builder = parse_logger.logger_analysis("capture.cfg")
-        except:
-            self._logger.warning("Logger configure fail")
-            import logging
-            return logging.getLogger("Capture")
-
-        if not process_log_path:
-            logger = logger_builder.get_Logger("simpleExample", "capture.log")
-        else:
-            logger = logger_builder.get_Logger("processLogger", \
-                    process_log_path + "/process.log")
-        return logger
-
     def mission(self, queue, result, locks=[]):
         """多进程任务的执行"""
-        None
+        pass
 
     def distribute_jobs(self, jobs):
         """任务分配，可以被重写，默认采用单条数据作为一个任务"""
@@ -105,15 +91,13 @@ class ProcessBuilder(object):
 
         # 添加全局任务监控进程
         process_list = []
-        p = multiprocessing.Process(target=self.log_total_missions, \
-                args=(self._queue,))
+        p = multiprocessing.Process(target=self.log_total_missions, args=(self._queue,))
         process_list.append(p)
         p.start()
 
         for i in range(worker_num):
-            p = multiprocessing.Process(target=self.mission, \
-                                        args=(self._queue, resultlist, \
-                                        self.lock,))
+            p = multiprocessing.Process(target=self.mission,
+                                        args=(self._queue, resultlist, self.lock,))
             process_list.append(p)
             p.start()
 

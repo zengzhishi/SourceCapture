@@ -65,22 +65,22 @@ filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroo
 
 def _check_undefined(slices):
     for slice in slices:
-        if re.search(r"\$\([a-zA-Z_][a-zA-Z0-9_]*\)", slice):
+        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice):
             return True
     return False
 
 
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    for c in s:
-        if c == "'":
-            single += 1
-        elif c == '"':
-            double += 1
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1
-    return is_half_quote
+# def unbalanced_quotes(s):
+#     single = 0
+#     double = 0
+#     for c in s:
+#         if c == "'":
+#             single += 1
+#         elif c == '"':
+#             double += 1
+#
+#     is_half_quote = single % 2 == 1 or double % 2 == 1
+#     return is_half_quote
 
 
 def split_line(line):
@@ -490,6 +490,41 @@ class AutoToolsParser(object):
                 break
             data += line
         return data
+
+
+def split_cmd_line(line):
+    # Pass 1: split line using whitespace
+    words = line.strip().split()
+    # Pass 2: merge words so that the no. of quotes is balanced
+    res = []
+    for w in words:
+        if len(res) > 0 and unbalanced_quotes(res[-1]):
+            res[-1] += " " + w
+        else:
+            res.append(w)
+    return res
+
+
+def unbalanced_quotes(s):
+    single = 0
+    double = 0
+    excute = 0
+    for c in s:
+        if c == "'":
+            single += 1
+        elif c == '"':
+            double += 1
+        if c == "`":
+            excute += 1
+
+    # 去除转义后的引号带来的影响
+    move_double = s.count('\\"')
+    move_single = s.count("\\'")
+    single -= move_single
+    double -= move_double
+
+    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
+    return is_half_quote
 
 
 if __name__ == "__main__":

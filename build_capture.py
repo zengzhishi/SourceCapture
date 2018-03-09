@@ -27,8 +27,6 @@ import capture.build_filter as build_filter
 
 import logging
 
-logger = logging.getLogger(__name__)
-
 # 需要改为绝对路径
 try:
     import redis
@@ -38,7 +36,8 @@ except ImportError:
 
 
 # 基本配置项
-DEFAULT_CONFIG_FILE = "conf/capture.cfg"
+DEFAULT_CONFIG_FOLDER = os.path.join("capture", "conf")
+DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_FOLDER, "capture.cfg")
 DEFAULT_COMPILER_ID = "GNU"
 DEFAULT_BUILDING_TYPE = "other"
 
@@ -59,10 +58,13 @@ COMPILER_COMMAND_MAP = {}
 config = configparser.ConfigParser()
 config.read(DEFAULT_CONFIG_FILE)
 DEFAULT_LOG_CONFIG_FILE = config.get("Default", "logging_config")
-DEFAULT_FLAGS = config.get("Default", "default_flags").split()
+DEFAULT_LOG_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_FOLDER, DEFAULT_LOG_CONFIG_FILE)
+DEFAULT_FLAGS = config.get("Default", "default_flags").split(" ")
 DEFAULT_MACROS = config.get("Default", "default_macros").split(",")
 DEFAULT_CXX_FLAGS = config.get("Default", "default_cxx_flags").split()
 COMPILER_COMMAND_MAP, DEFAULT_COMPILE_COMMAND = load_compiler(config, COMPILER_COMMAND_MAP)
+
+logger = logging.getLogger("capture")
 
 
 # 并发构建编译命令
@@ -78,7 +80,7 @@ class CommandBuilder(building_process.ProcessBuilder):
     def mission(self, queue, result, locks=[]):
         lock = locks[0]
         pid = os.getpid()
-        self._logger.info("Process pid:%d start." % pid)
+        logger.info("Process pid:%d start." % pid)
         lock.acquire()
         while not queue.empty():
             job_dict = queue.get()
@@ -98,7 +100,7 @@ class CommandBuilder(building_process.ProcessBuilder):
                         lst[1] = lst[1].replace(" ", "\ ")
                         definition = lst[0] + r"\"" + lst[1] + r"\""
                     else:
-                        self._logger.warning("definition %s analysis error" % definition)
+                        logger.warning("definition %s analysis error" % definition)
                 definition_string += "-D" + definition + " "
             include_string = ""
             for include in job_dict["includes"]:
@@ -124,11 +126,11 @@ class CommandBuilder(building_process.ProcessBuilder):
                                 lst[1] = lst[1].replace(" ", "\ ")
                                 definition = lst[0] + r"\"" + lst[1] + r"\""
                             else:
-                                self._logger.warning("custom definition %s analysis error" % definition)
+                                logger.warning("custom definition %s analysis error" % definition)
                         custom_args_string += "-D" + definition + " "
 
-                transfer_name = file_args_MD5Calc(src, \
-                                      job_dict["flags"], job_dict["definitions"], job_dict["includes"], custom_args_string)
+                transfer_name = file_args_MD5Calc(src, job_dict["flags"], \
+                                                  job_dict["definitions"], job_dict["includes"], custom_args_string)
                 output_command = " " + args_string
                 output_command += custom_args_string
                 output_command += "-c " + src + " "
@@ -154,7 +156,7 @@ class CommandBuilder(building_process.ProcessBuilder):
             lock.acquire()
         lock.release()
 
-        self._logger.info("Process pid:%d Complete." % pid)
+        logger.info("Process pid:%d Complete." % pid)
         return
 
 
@@ -163,7 +165,7 @@ class CommandExec(building_process.ProcessBuilder):
 
         lock = locks[0]
         pid = os.getpid()
-        self._logger.info("Process pid:%d start." % pid)
+        logger.info("Process pid:%d start." % pid)
         lock.acquire()
         while not queue.empty():
             job_dict = queue.get()
@@ -175,35 +177,21 @@ class CommandExec(building_process.ProcessBuilder):
 
             cmd = "cd %s" % directory + "; " + command
 
-            p = subprocess.Popen(cmd, shell=True, \
+            p = subprocess.Popen(cmd, shell=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            # 可能会导致管道阻塞
-            """
-            retval = p.wait()
-            sys.stdout.write("------ " + file + " --------\n" + p.stdout.read())
 
-            if retval == 0:
-                self._logger.info("compile: %s success" % file)
-            else:
-                self._logger.warning("compile: %s fail" % file)
-            """
-            # 推荐做法
             out, err = p.communicate()
             sys.stdout.write(" CC Building {}\n{}".format(file, out))
-            # if out:
-            #     sys.stdout.write(" CC Building {}\n{}".format(file, out))
-            # else:
-            #     sys.stdout.write("------ " + file + " --------\n")
 
             if p.returncode != 0:
-                self._logger.warning("compile: %s fail" % file)
+                logger.warning("compile: %s fail" % file)
             else:
-                self._logger.info("compile: %s success" % file)
+                logger.info("compile: %s success" % file)
 
             lock.acquire()
         lock.release()
 
-        self._logger.info("Process pid:%d Complete." % pid)
+        logger.info("Process pid:%d Complete." % pid)
         return
 
 
@@ -236,7 +224,7 @@ def fileMD5Calc(file):
 def source_path_MD5Calc(file):
     """直接计算文件路径的MD5，不考虑文件内容，只要能对文件就行重新命令即可"""
     m = hashlib.md5()
-    m.update(file)
+    m.update(file.encode("utf8"))
     return m.hexdigest()
 
 
@@ -261,15 +249,15 @@ def file_args_MD5Calc(file, flags, definitions, includes, custom_arg):
     :return:
     """
     m = hashlib.md5()
-    m.update(file)
+    m.update(file.encode("utf8"))
 
     args = (flags, definitions, includes)
     for configs in args:
         configs.sort()
         for line in configs:
-            m.update(line)
+            m.update(line.encode("utf8"))
     if custom_arg:
-        m.update(custom_arg)
+        m.update(custom_arg.encode("utf8"))
     return m.hexdigest()
 
 
@@ -344,8 +332,7 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
 
 class CaptureBuilder(object):
     """主要的编译构建脚本生成类"""
-    def __init__(self, logger,
-                 root_path,
+    def __init__(self, root_path,
                  output_path=None,
                  build_type=DEFAULT_BUILDING_TYPE,
                  build_path=None,
@@ -358,7 +345,6 @@ class CaptureBuilder(object):
             self.__prefers = []
         self.__root_path = os.path.abspath(root_path)
         self.__build_type = build_type
-        self._logger = logger
 
         # 先这样先
         if build_path:
@@ -396,8 +382,7 @@ class CaptureBuilder(object):
 
     @prefers.setter
     def prefers(self, prefers):
-        import types
-        if isinstance(prefers, types.ListType):
+        if isinstance(prefers, list):
             self.__prefers = prefers
         else:
             raise TypeError("object 'prefers' is not ListType")
@@ -445,7 +430,7 @@ class CaptureBuilder(object):
             try:
                 files_s.remove(source_file)
             except ValueError:
-                self._logger.warning("file: %s not found, is compiled multitimes or project scan error!" % (source_file))
+                logger.warning("file: %s not found, is compiled multi-times or project scan error!" % (source_file))
 
             includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
             final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
@@ -462,15 +447,14 @@ class CaptureBuilder(object):
                 "flags": list(final_flags),
                 "exec_directory": command_info["directory"],
                 "compiler_type": command_info["compiler"],
-                # 考虑是否可以不加，没必要
                 "custom_flags": [],
                 "custom_definitions": [],
                 "config_from": []
             }
             source_infos.append(file_infos)
 
-        # use sub_paths to build up globle includes, and get system includes
-        # build up command for left source files
+        # Use sub_paths to build up globle includes, and get system includes
+        # Build up command for left source files
         self._build_default_commands(sub_paths, files_s, source_infos)
         return source_infos, include_files, files_count
 
@@ -480,18 +464,18 @@ class CaptureBuilder(object):
         :return:            project_scan_result     =>      json
         """
         source_infos = []
-        self._logger.info("Start Scaning project folders...")
+        logger.info("Start Scaning project folders...")
         if self.__build_type == "cmake":
             if not self.__build_path:
-                self.__build_path = self.__root_path + "/build"
+                self.__build_path = os.path.join(self.__root_path, "build")
 
-            cmake_analyzer = source_detective.CMakeAnalyzer(self._logger, self.__root_path,
+            cmake_analyzer = source_detective.CMakeAnalyzer(logger, self.__root_path,
                                                             self.__output_path, self.__prefers, self.__build_path)
             source_infos, include_files, files_count = cmake_analyzer.get_project_infos()
 
         elif self.__build_type == "make":
             # scan project files
-            make_analyzer = source_detective.MakeAnalyzer(self._logger, self.__root_path,
+            make_analyzer = source_detective.MakeAnalyzer(logger, self.__root_path,
                                                           self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
                 make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
@@ -502,7 +486,7 @@ class CaptureBuilder(object):
                                                                                 compile_db)
 
         elif self.__build_type == "scons":
-            scons_analyzer = source_detective.SConsAnalyzer(self._logger, self.__root_path,
+            scons_analyzer = source_detective.SConsAnalyzer(logger, self.__root_path,
                                                             self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h, compile_db = \
                 scons_analyzer.get_project_infos_scons(build_args=self._extra_build_args)
@@ -514,7 +498,7 @@ class CaptureBuilder(object):
 
         else:
             # 连构建脚本都没有，直接构建
-            analyzer = source_detective.Analyzer(self._logger, self.__root_path,
+            analyzer = source_detective.Analyzer(logger, self.__root_path,
                                                  self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h = analyzer.get_project_infos()
             include_files = files_h
@@ -522,57 +506,57 @@ class CaptureBuilder(object):
 
             self._build_default_commands(sub_paths, files_s, source_infos)
 
-        self._logger.info("End of Scaning project folders...")
+        logger.info("End of Scaning project folders...")
 
         # dumping data
-        scan_data_dump(self.__output_path + "/project_scan_result.json", source_infos)
+        scan_data_dump(self.__output_path + "/project_scan_result.json", list(source_infos))
         return source_infos, include_files, files_count
 
     def judge_building(self):
         if self.__build_type == "other":
             # 检查 cmake
-            self._logger.info("Checking and trying to build cmake environment.")
+            logger.info("Checking and trying to build cmake environment.")
             status, build_path = source_detective.using_cmake(self.__root_path, self.__output_path)
             if status:
                 self.__build_path = build_path
                 self.__build_type = "cmake"
-                self._logger.info("Build cmake environment succes!")
+                logger.info("Build cmake environment succes!")
                 return
 
             # 检查 autotools
-            self._logger.info("Building cmake fail; Checking and trying to build autotools environment.")
+            logger.info("Building cmake fail; Checking and trying to build autotools environment.")
             status, build_path = source_detective.using_autotools(self.__root_path, self.__output_path)
             if status:
                 self.__build_path = build_path
                 self.__build_type = "make"
-                self._logger.info("Build configure environment succes!")
+                logger.info("Build configure environment succes!")
                 return
 
             # 检查 Makefile
-            self._logger.info("Building autotools fail; Checking Makefile.")
+            logger.info("Building autotools fail; Checking Makefile.")
             status, build_path = source_detective.using_make(self.__root_path)
             if status:
                 self.__build_path = self.__root_path
                 self.__build_type = "make"
-                self._logger.info("Makefile exist!")
+                logger.info("Makefile exist!")
                 return
 
             # 检查 scons
-            self._logger.info("Building Makefile fail; Checking scons.")
+            logger.info("Building Makefile fail; Checking scons.")
             status, build_path = source_detective.using_scons(self.__root_path)
             if status:
                 self.__build_path = self.__root_path
                 self.__build_type = "scons"
-                self._logger.info("SConstruct exist!")
+                logger.info("SConstruct exist!")
                 return
 
-            self._logger.info("Without other Useful tools, using default build_type:[%s]", self.__build_type)
+            logger.info("Without other Useful tools, using default build_type:[%s]", self.__build_type)
             self.__build_path = self.__root_path
 
     def command_prebuild(self, source_infos, generate_bitcode, files_count):
         # if len(source_infos) > 100 and files_count > 5000:
             # 只有任务比较多的时候，构建才需要并行化
-        command_builder = CommandBuilder(self._logger)
+        command_builder = CommandBuilder()
         command_builder.distribute_jobs(source_infos)
         # setting
         command_builder.basic_setting(COMPILER_COMMAND_MAP[self.__compiler_id],
@@ -599,28 +583,27 @@ class CaptureBuilder(object):
         commands = copy.deepcopy(compile_commands)
         commands.extend(bc_compile_commands)
         output_list = commands
-        self._logger.info("All compile_commands count: %d" % len(commands))
-        build_filter_ins = build_filter.BuildFilter(self._logger)
+        logger.info("All compile_commands count: %d" % len(commands))
+        build_filter_ins = build_filter.BuildFilter(logger)
         transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
         output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
 
-        self._logger.info("Need to recompile commands count: %d" % len(output_list))
+        logger.info("Need to recompile commands count: %d" % len(output_list))
         return output_list
 
     def command_exec(self, commands):
-        command_exec = CommandExec(self._logger)
+        command_exec = CommandExec()
         command_exec.distribute_jobs(commands)
         command_exec.run()
         return
 
 
 def parse_prefer_str(prefer_str, input_path):
-    if prefer_str == "":
-        prefers = []
-    elif prefer_str == "all":
+    if prefer_str == "all":
         prefers = source_detective.get_directions(input_path)
     else:
-        prefers = prefer_str.strip(' \n\t').split(",")
+        prefers = prefer_str.split(",")
+        prefers = list(map(lambda prefer: prefer.strip(" \t"), prefers))
     return prefers
 
 
@@ -645,23 +628,21 @@ def main():
 
     """
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("project_root_path", nargs="?",
+    parser.add_argument("project_root_path",
                         help="The project root path you want to analyze.")
-    parser.add_argument("result_output_path", nargs="?",
+    parser.add_argument("result_output_path",
                         help="The project analysis result output path.")
 
     parser.add_argument("-p", "--prefers", default="all", nargs="*",
                         help="The prefer directories you want to scan from project. (default: %(default)s)")
 
     parser.add_argument("-t", "--build_type",
-                        # action="store_const",
-                        # const="make",
                         nargs="?",
                         choices=["make", "cmake", "scons", "other"],
                         default="other",
                         help="The building type of project you choose.")
 
-    parser.add_argument("-b", "--build_path",
+    parser.add_argument("-b", "--build_path", default=None,
                         help="The outer project building path.")
 
     parser.add_argument("-c", "--compiler_id", default="GNU", nargs="?",
@@ -674,36 +655,47 @@ def main():
     parser.add_argument("--update_all", action='store_true',
                         help="Whether update all.")
 
-    parser.add_argument("--extra_build_args", help='Arguments used in building tools. Usage: [--extra_build_args=" ARGS1 ARGS2.. "]')
+    parser.add_argument("--extra_build_args", default="",
+                        help='Arguments used in building tools. Usage: [--extra_build_args=" ARGS1 ARGS2.. "]')
 
-    parser.add_argument("-n", "--just_print", action='store_true',
+    parser.add_argument("-n", "--just-print", "--dry-run", action='store_true',
                         help="Just output compile_commands.json and other info, without running commands.")
 
     args = vars(parser.parse_args())
-    input_path = args["project_root_path"]
-    output_path = args["result_output_path"]
+    input_path = args.get("project_root_path", None)
+    output_path = args.get("result_output_path", None)
+
     build_type = args["build_type"]
     compiler_id = args["compiler_id"]
     prefers = args["prefers"]
+
     generate_bitcode = args["generate_bitcode"]
-    extra_build_args = args["extra_build_args"]
-    just_print = args["just_print"]
+    just_print = args.get("just_print", False)
     update_all = args["update_all"]
-    build_path = args["build_path"] if "build_path" in args else ""
+
+    build_path = args.get("build_path", "")
+    extra_build_args = args.get("extra_build_args", "")
+
+    if input_path is None or output_path is None:
+        logger.critical("Please input project path to scan and output path.")
+        sys.exit(-1)
 
     if len(input_path) > 1 and input_path[-1] == '/':
         input_path = input_path[:-1]
 
-    config_file = DEFAULT_LOG_CONFIG_FILE
-    logger = parse_logger.getLogger(config_file, new_output=output_path + "/capture.log")
+    logger_path = os.path.join(output_path, "capture.log")
+    parse_logger.addFileHandler(logger_path, "capture")
 
-    # 获取关注目录
+    if just_print:
+        logger.info("Using dry-run mode.")
+
+    # Get prefers directories
     if "all" in prefers:
         prefers = parse_prefer_str("all", input_path)
     logger.info("prefer directories: %s" % str(prefers))
 
     if compiler_id not in COMPILER_COMMAND_MAP:
-        sys.stderr.write("No such compiler_id! Use default compiler_id")
+        logger.warning("No such compiler_id! Use default compiler_id")
         compiler_id = None
 
     # CaptureBuilder
@@ -723,7 +715,7 @@ def main():
 
     filter_result = capture_builder.command_filter(result, bc_result, update_all)
     if not just_print:
-        print("Start building object file and bc file")
+        logging.info("Start building object file and bc file")
         capture_builder.command_exec(filter_result)
     else:
         files = list(map(lambda x: x["file"], filter_result))
