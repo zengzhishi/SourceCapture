@@ -51,6 +51,7 @@ Makefile直接构建的项目能提取比较完整的命令参数
 31. 测试系统的健壮性 **doing**
 32. ~~Makefile.am 解析~~
 33. configure.ac 解析
+34. m4 文件的解析
 
 
 

@@ -12,7 +12,6 @@
 import sys
 import logging
 import logging.config
-from logging.handlers import RotatingFileHandler
 
 
 def get_log_level(level='debug'):
