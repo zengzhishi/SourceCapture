@@ -64,12 +64,21 @@ class M4Lexer(object):
         'DOUBLE_QUOTE',
         'START',
 
+        'GREATER_OR_EQUAL',
+        'LESS_OR_EQUAL',
+
+        'GREATER',
+        'LESS',
+
         'EQUAL',
         'ASSIGN',
         'APPEND',
         'CASE_OR',
         'AND',
         'OR',
+
+        'SLASH',
+        'BACKSLASH',
         'NUMBER',
         'ID',
     ] + list(reserved.values())
@@ -94,9 +103,17 @@ class M4Lexer(object):
     t_CASE_OR = r'\|'
     t_AND = r'&&'
     t_OR = r'\|\|'
+
+    t_GREATER_OR_EQUAL = r'\>\='
+    t_LESS_OR_EQUAL = r'<='
+    t_GREATER = r'>'
+    t_LESS = r'<'
     t_EQUAL = r'\=\='
     t_APPEND = r'\+\='
     t_ASSIGN = r'\='
+
+    t_SLASH = r'\/'
+    t_BACKSLASH = r'\\'
     t_NUMBER = r'\d+\.?\d*'
 
     t_ignore = ' \t'
@@ -224,12 +241,32 @@ def _check_bool_expresion(generator):
         token = generator.next()
         if token.type != "test" and token.type != "LSPAREN":
             raise ParserError
+        quote_index = -1
         while token.type != "then":
-            if token.type != "SEMICOLON":
+            if token.type == "SEMICOLON":
+                pass
+            elif token.type == "DOUBLE_QUOTE":
+                if quote_index < 0:
+                    quote_index = len(option_list)
+                else:
+                    option_list[quote_index] = '"' + option_list[quote_index]
+                    option_list[-1] += '"'
+                    quote_index = -1
+            elif token.type == "MINUS":
+                if generator.index > 0:
+                    last_token = generator.get_history(generator.index - 2)[0]
+                    next_token = generator.next()
+                    if last_token.type == "RSPAREN" or last_token.type == "test":
+                        # It means this MINUS maybe use to represent argunments
+                        option_list.append("-" + next_token.value)
+                    else:
+                        option_list[-1] += "-" + next_token.value
+            else:
                 option_list.append(token.value)
             token = generator.next()
     except StopIteration:
         raise ParserError
+
     return " ".join(option_list)
 
 
@@ -239,7 +276,6 @@ def _check_sh_if(generator, level, func_name=None):
     reverses.append(False)
     end_flags = False
     while not end_flags:
-        # TODO: 可以是一个default解析, 需要添加新的结束条件 else | elif | fi
         analyze(generator, analysis_type="default", func_name=func_name,
                 level=level + 1, ends=["else", "elif", "fi"])
         generator.seek(generator.index - 1)
@@ -511,7 +547,6 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         slices.append(temp)
                         slices.reverse()
                         transfer_word = "".join(slices)
-                        # TODO: 尚未添加 option 的处理
                         if _check_undefined(slices):
                             if _check_undefined(slices):
                                 present_option_dict["is_replace"] = False
@@ -542,7 +577,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 token = generator.next()
             else:
                 # 4. Start with some undefined token, we maybe skip it.
-                # TODO: 这里缺少了对 if test ... 和 case 的处理
+                # TODO: 这里缺少了对 case 的处理
                 token = generator.next()
 
     elif analysis_type == "string":
@@ -706,6 +741,16 @@ class CacheGenerator(object):
         self._set_max()
         print(data)
         return data
+
+    def last(self):
+        if self._index != 0:
+            self._index -= 1
+            data = self._caches[self._index]
+            return data
+        return None
+
+    def get_history(self, start_index=0):
+        return self._caches[start_index - 1:-1] if start_index else self._caches[start_index:-1]
 
     def seek(self, index=0):
         if index > self._max_index:

@@ -22,6 +22,9 @@ AC_DEFUN([CURL_CHECK_COMPILER_ARRAY_SIZE_NEGATIVE], [
     AC_MSG_RESULT([yes])
   ])
   AC_MSG_CHECKING([if compiler halts on negative sized arrays])
+  if test ! -s out/conftest.er2 || diff out/conftest.exp out/conftest.er2 >/dev/null; then
+    CXXFLAGS="-DHAVE_CONFIG_H $CXXFLAGS"
+  fi
 ])
 
 

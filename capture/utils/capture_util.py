@@ -15,10 +15,12 @@ import logging
 logger = logging.getLogger("capture")
 
 
-def subproces_calling(cmd="", cwd="./", stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
+def subproces_calling(cmd="", cwd=None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
     try:
-        p = subprocess.Popen(cmd, shell=True, cwd=cwd,
-                             stdout=stdout, stderr=stderr)
+        if cwd:
+            p = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=stdout, stderr=stderr)
+        else:
+            p = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
 
         out, err = p.communicate()
 
