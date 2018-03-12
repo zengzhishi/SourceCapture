@@ -279,6 +279,39 @@ def _cache_check_assign(generator):
         raise ParserError
 
 
+def _check_global_dict_empty(dict):
+    default_n_regex = re.compile(r"default_\d+")
+    default_N = 1
+    for option_key in dict["option"].keys():
+        if default_n_regex.match(option_key):
+            default_N += 1
+    if len(dict["defined"]) != 0 or len(dict["undefined"]) != 0 or len(dict["option"]) != 0:
+        return True, default_N
+    return False, 0
+
+
+def _get_present_level_dict(start_dict, is_assign=False):
+    present_dict = start_dict
+    has_default, default_N = _check_global_dict_empty(present_dict)
+
+    if len(options) == 0 and is_assign and has_default:
+        # for default_N option, False will not be used.
+        present_dict["option"]["default_%d" % default_N] = {
+            True: {"defined": [], "undefined": [], "option": {}, "is_replace": True},
+            False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+        }
+        present_dict = present_dict["option"]["default_%d" % default_N][True]
+
+    for option, reverse_stat in zip(options, reverses):
+        if option not in present_dict["option"]:
+            present_dict["option"][option] = {
+                True: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+                False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+            }
+        present_dict = present_dict["option"][option][not reverse_stat]
+    return present_dict
+
+
 def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["RSPAREN",]):
     logger.info("# calling analysis with type: " + analysis_type +
                 " In function: " + func_name + "\tlevel:" + str(level))
@@ -381,11 +414,21 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
             elif token.type == "ID":
                 # 3. Analyze some assignment line, and skip some line we don't care.
                 logger.info("## Start unknown line analysis %s" % token)
+                var = token.value
                 next_token = generator.next()
                 if next_token.type == "ASSIGN" or next_token.type == "APPEND":
+                    is_assign = True if next_token.type == "ASSIGN" else False
                     value = _cache_check_assign(generator)
                     if value is not None:
                         # TODO: 修改变量
+                        # if var not in functions[func_name]["variables"]:
+                        #     functions[func_name]["variables"][var] = {
+                        #         "defined": [],
+                        #         "undefined": [],
+                        #         "option": [],
+                        #         "is_replace": True,
+                        #     }
+                        # start_dict = functions[func_name]["variables"][var]
                         pass
                     token = generator.next()
                 else:
@@ -426,9 +469,14 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         variables[var] = {
                             "defined": [],
                             "undefined": [],
-                            "option": [],
+                            "option": {},
                             "is_replace": True if assign_match else False
                         }
+
+                    present_option_dict = _get_present_level_dict(variables[var], True if assign_match else False)
+                    present_option_dict["is_replace"] = True if assign_match else False
+                    present_option_dict["defined"] = present_option_dict["defined"] if append_match else []
+                    present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
 
                     words = split_line(value)
                     temp = ""
@@ -445,10 +493,10 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                             other = with_var_line_match.group(3)
                             if undefine_var in variables:
                                 value = variables[undefine_var]
-                                if len(value["undefined"]) == 0 and value["option"] is None:
+                                if len(value["undefined"]) == 0 and len(value["option"]) == 0:
                                     undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
                                     temp = temp + undefine_var + other
-                                elif value["option"] is None:
+                                elif len(value["option"]) == 0:
                                     slices.append(other)
                                     slices.append(value["defined"])
                                     slices.append(value["undefined"])
@@ -466,13 +514,13 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         # TODO: 尚未添加 option 的处理
                         if _check_undefined(slices):
                             if _check_undefined(slices):
-                                variables[var]["is_replace"] = False
+                                present_option_dict["is_replace"] = False
                                 if len(slices) == 1:
                                     temp = ""
                                     continue
-                            variables[var]["undefined"].append(transfer_word)
+                            present_option_dict["undefined"].append(transfer_word)
                         else:
-                            variables[var]["defined"].append(transfer_word)
+                            present_option_dict["defined"].append(transfer_word)
 
                         temp = ""
 
@@ -527,7 +575,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
             functions[func_name]["variables"][token.value] = {
                 "defined": [],
                 "undefined": [],
-                "option": [],
+                "option": {},
                 "is_replace": True,
             }
         export_conditions[token.value] = 1
@@ -538,7 +586,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
         export_vars[token.value] = {
             "defined": [],
             "undefined": [],
-            "option": [],
+            "option": {},
             "is_replace": True
         }
         token = generator.next()

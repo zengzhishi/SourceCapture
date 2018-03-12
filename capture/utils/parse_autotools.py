@@ -75,19 +75,6 @@ def _check_undefined(slices):
     return False
 
 
-# def unbalanced_quotes(s):
-#     single = 0
-#     double = 0
-#     for c in s:
-#         if c == "'":
-#             single += 1
-#         elif c == '"':
-#             double += 1
-#
-#     is_half_quote = single % 2 == 1 or double % 2 == 1
-#     return is_half_quote
-
-
 def split_line(line):
     # Pass 1: split line using whitespace
     words = line.strip().split()
@@ -284,8 +271,6 @@ class AutoToolsParser(object):
         return False, 0
 
     def _get_option_level_dict(self, start_dict, options, is_in_reverse, is_assign):
-        if len(options) == 0:
-            return start_dict
         present_dict = start_dict
         has_default, default_N = self._check_global_dict_empty(present_dict)
         if len(options) == 0 and is_assign and has_default:
@@ -294,6 +279,7 @@ class AutoToolsParser(object):
                 True: {"defined": [], "undefined": [], "option": {}, "is_replace": True},
                 False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
             }
+            present_dict = present_dict["option"]["default_%d" % default_N][True]
         for option, reverse_stat in zip(options, is_in_reverse):
             if option not in present_dict["option"]:
                 present_dict["option"][option] = {
@@ -494,19 +480,6 @@ class AutoToolsParser(object):
                 break
             data += line
         return data
-
-
-def split_cmd_line(line):
-    # Pass 1: split line using whitespace
-    words = line.strip().split()
-    # Pass 2: merge words so that the no. of quotes is balanced
-    res = []
-    for w in words:
-        if len(res) > 0 and unbalanced_quotes(res[-1]):
-            res[-1] += " " + w
-        else:
-            res.append(w)
-    return res
 
 
 def unbalanced_quotes(s):

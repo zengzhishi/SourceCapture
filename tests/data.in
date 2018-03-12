@@ -78,8 +78,11 @@ AC_DEFUN([CURL_CHECK_COMPILER_STRUCT_MEMBER_SIZE], [
     AC_MSG_RESULT([yes])
   else
     AC_MSG_RESULT([no])
+    CXXFLAGS="-DTIMESTAMP=1.1 $CXXFLAGS"
     AC_MSG_ERROR([compiler fails struct member size checking.])
   fi
+
+  CXXFLAGS="-D_REENTRANT $CXXFLAGS"
 ])
 
 AC_DEFUN([PDNS_CHECK_OS],[
