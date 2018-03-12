@@ -200,6 +200,34 @@ def _check_undefined_self(slices, self_var):
     return False
 
 
+def _check_bool_expresion(generator):
+    # TODO: 结束条件可以是两种： ; | then
+    # 返回选择条件
+    return ""
+
+
+def _check_sh_if(generator):
+    check_next(generator, "test")
+    option = _check_bool_expresion(generator)
+    check_next(generator, "then")
+    end_flags = False
+    reverse = False
+    while not end_flags:
+        # TODO: 可以是一个default解析, 需要添加新的结束条件 else | elif | fi
+        analyze(generator, analysis_type="default")
+        generator.seek(generator.index - 1)
+        token = generator.next()
+        if token.type == "fi":
+            end_flags = True
+        elif token.type == "else":
+            reverse = True
+        elif token.type == "elif":
+            option = _check_bool_expresion(generator)
+        else:
+            raise ParserError
+    return
+
+
 # 代表没有解析到目标的token，解析异常
 class ParserError(Exception):
     def __init__(self, message=None):
@@ -210,12 +238,16 @@ class ParserError(Exception):
 
 
 def analyze(generator, analysis_type="default", func_name=None, level=0):
-    logger.info("# calling analysis with type: " + analysis_type + " In function: " + func_name + "\tlevel:" + str(level))
+    logger.info("# calling analysis with type: " + analysis_type +
+                " In function: " + func_name + "\tlevel:" + str(level))
     quote_count = 0
-    start_tokens = [generator.next() for _ in range(2)]
+    try:
+        start_tokens = [generator.next() for _ in range(2)]
+    except StopIteration:
+        raise ParserError
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
         # Double quote include data is code for c/c++ which is used to automatically generate new source file.
-        # So we skip them here.
+        # Because we don't care about them, we skip them here.
         quote_count += 2
         token = generator.next()
         while quote_count != 0:
@@ -229,6 +261,8 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
         else:
             raise ParserError
     elif start_tokens[0].type != "LSPAREN":
+        # TODO: 这里其实还可能是不规范的写法，没有使用 [] 来括起一个参数域，这种情况属于不规范的方式，
+        # 但是autotools可以解析，需要保持兼容
         raise ParserError
 
     generator.seek(generator.index - 1)
@@ -242,7 +276,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
             if token.type == "ID" and token.value in m4_macros_map:
                 logger.info("## Start defined function analysis\tname: " + token.value)
                 check_next(generator, "LPAREN")
-                for i in range(len(m4_macros_map[token.value]) / 2):
+                for i in range(len(m4_macros_map[token.value]) // 2):
                     name = m4_macros_map[token.value][i * 2]
                     is_essential = m4_macros_map[token.value][i * 2 + 1]
 
@@ -395,8 +429,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0):
                     break
 
             # elif token.type == "if":
-            #     check_next(generator, "test")
-            #     next_token = generator.next()
+            #     pass
 
             elif token.type in left:
                 quote_count += 1
@@ -560,7 +593,7 @@ class CacheGenerator(object):
         self._generator = generator
 
         try:
-            data = self._generator.next()
+            data = next(self._generator)
             self._caches.append(data)
             self._index += 1
             self._set_max()
@@ -578,7 +611,7 @@ class CacheGenerator(object):
     def next(self):
         if self._index == self._max_index:
             try:
-                data = self._generator.next()
+                data = next(self._generator)
                 self._caches.append(data)
             except StopIteration:
                 self._has_next = False

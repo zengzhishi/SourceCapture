@@ -33,22 +33,27 @@ def get_log_level(level='debug'):
     return LEVELS[level]
 
 
-level = get_log_level()
+default_level = get_log_level()
 capture_logger = logging.getLogger("capture")
 
 console_formatter = logging.Formatter(
-    '??? %(message)s'
+    '%(message)s'
 )
 formatter = logging.Formatter(
     "%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s")
 
-if level is not None:
-    capture_logger.setLevel(level)
+
+if default_level is not None:
+    capture_logger.setLevel(default_level)
+capture_logger.propagate = False
 
 
-def addConsoleHandler(logger=None):
+def addConsoleHandler(logger=None, levelname='info'):
     # if not capture_logger.handlers:
-    default_handler = logging.StreamHandler(sys.stderr)
+    default_handler = logging.StreamHandler()
+    level = get_log_level(levelname)
+    if level is not None:
+        default_handler.setLevel(level)
     default_handler.setFormatter(console_formatter)
     if logger:
         logger.addHandler(default_handler)
@@ -56,7 +61,10 @@ def addConsoleHandler(logger=None):
         capture_logger.addHandler(default_handler)
 
 
-def addFileHandler(filePath, logger_field="capture", format=None):
+addConsoleHandler()
+
+
+def addFileHandler(filePath, logger_field="capture", format=None, levelname='none'):
     """
     Config logging.
 
@@ -66,13 +74,14 @@ def addFileHandler(filePath, logger_field="capture", format=None):
     logger = logging.getLogger(logger_field)
 
     if filePath:
-        filehandler = RotatingFileHandler(filePath, "w")
-        level = get_log_level()
+        filehandler = logging.FileHandler(filePath, "w")
         if not format:
             filehandler.setFormatter(formatter)
         else:
             filehandler.setFormatter(format)
-        filehandler.setLevel(level)
+        level = get_log_level(levelname)
+        if level is not None:
+            filehandler.setLevel(level)
         logger.addHandler(filehandler)
 
 

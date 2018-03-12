@@ -179,9 +179,7 @@ class CommandExec(building_process.ProcessBuilder):
     def mission(self, q, result):
 
         pid = os.getpid()
-        parse_logger.addConsoleHandler(self._logger)
-        self._logger.warning("Process pid:%d start." % pid)
-        print(self._logger.handlers)
+        self._logger.info("Process pid:%d start." % pid)
         is_empty = False
         while not is_empty:
             try:
@@ -198,13 +196,15 @@ class CommandExec(building_process.ProcessBuilder):
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
             out, err = p.communicate()
-            # sys.stdout.write(" CC Building {}\n{}".format(file, out))
-
-            print(self._logger.handlers)
-            if p.returncode != 0:
-                self._logger.warning("compile: %s fail" % file)
+            if out:
+                self._logger.info(" CC Building {}\n{}".format(file, out))
             else:
-                self._logger.info("compile: %s success" % file)
+                self._logger.info(" CC Building {}".format(file))
+
+            if p.returncode != 0:
+                self._logger.debug("compile: %s fail" % file)
+            else:
+                self._logger.debug("compile: %s success" % file)
 
         self._logger.info("Process pid:%d Complete." % pid)
         return
@@ -405,10 +405,6 @@ class CaptureBuilder(object):
 
     def _build_default_commands(self, sub_paths, files_s, source_infos):
         global_includes = map(lambda path: os.path.abspath(path), sub_paths)
-        # replace some illegal symbols
-        # global_includes = map(lambda path: os.path.abspath(path.replace(' ', '\ ')), global_includes)
-        # global_includes = map(lambda path: os.path.abspath(path.replace('(', '\(')), global_includes)
-        # global_includes = map(lambda path: os.path.abspath(path.replace(')', '\)')), global_includes)
         c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False, files_s)
         cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False,
                            files_s)
@@ -691,11 +687,11 @@ def main():
     extra_build_args = args.get("extra_build_args", "")
 
     # parse_logger.addConsoleHandler()
-
-    if input_path is None or output_path is None:
-        logger.critical("Please input project path to scan and output path.")
-        sys.exit(-1)
-
+    #
+    # if input_path is None or output_path is None:
+    #     logger.critical("Please input project path to scan and output path.")
+    #     sys.exit(-1)
+    #
     # if len(input_path) > 1 and input_path[-1] == '/':
     #     input_path = input_path[:-1]
 

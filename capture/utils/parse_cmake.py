@@ -12,8 +12,6 @@
 import re
 import os
 
-import types
-
 
 def strip_quotation(string):
     if (string[0] == "\"" and string[-1] == "\"") \

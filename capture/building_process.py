@@ -9,8 +9,10 @@
     @Note: 进程池管理类
 """
 
+import sys
 import time
 import multiprocessing
+import signal
 import logging
 
 logger = logging.getLogger("capture")
@@ -19,15 +21,23 @@ logger = logging.getLogger("capture")
 CPU_CORE_COUNT = multiprocessing.cpu_count()
 
 
+def register(func):
+    def add_signal(*args, **kwargs):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        return func(*args, **kwargs)
+    return add_signal
+
+
 class ProcessBuilder(object):
     """
         使用时，先继承该类，设置logger和进程锁数目，然后需要重写mission和run函数，决定任务分配和数据的保存等。
     """
-    def __init__(self, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT, timeout=None):
+    def __init__(self, process_logger=None, lock_nums=1, process_amount=CPU_CORE_COUNT, timeout=1.0):
         self.process_amount = process_amount
         self._manager = multiprocessing.Manager()
-        self._queue = self._manager.Queue()
+        # self._queue = self._manager.Queue()
         # self._queue = queue.Queue()
+        self._queue = multiprocessing.Queue()
         self._timeout = timeout
 
         self._logger = logger
@@ -40,6 +50,7 @@ class ProcessBuilder(object):
     def timeout(self):
         return self._timeout
 
+    @register
     def mission(self, queue, result):
         """多进程任务的执行"""
         pass
@@ -54,7 +65,7 @@ class ProcessBuilder(object):
         log_function = getattr(logger, level.lower())
         log_function(massage)
 
-    def log_total_missions(self, queue, check_interval=0.01):
+    def log_total_missions(self, queue, check_interval=1.0):
         """定时报告整体任务完成度，可以被重写，默认检查总任务数完成百分比"""
         total_count = queue.qsize()
         if total_count == 0:
@@ -94,8 +105,15 @@ class ProcessBuilder(object):
             process_list.append(p)
             p.start()
 
-        for p in process_list:
-            p.join()
+        try:
+            for p in process_list:
+                p.join()
+        except KeyboardInterrupt:
+            for p in process_list:
+                p.terminate()
+                p.join()
+            logger.critical("Mission stop by keyboard!")
+            sys.exit(-1)
 
         end_time = time.clock()
         self._logger.info("All Process Time: %f" % (end_time - start_time))
