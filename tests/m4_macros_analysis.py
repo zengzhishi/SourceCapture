@@ -34,7 +34,7 @@ reserved = {
     "fi": "fi",
     "case": "case",
     "in": "in",
-    "esac": "esac"
+    "esac": "esac",
 }
 
 
@@ -77,6 +77,10 @@ class M4Lexer(object):
         'AND',
         'OR',
 
+        'BACKQUOTE',
+        'AT',
+        'DOLLAR',
+        'AMPERSAND',
         'SLASH',
         'BACKSLASH',
         'NUMBER',
@@ -112,6 +116,10 @@ class M4Lexer(object):
     t_APPEND = r'\+\='
     t_ASSIGN = r'\='
 
+    t_BACKQUOTE = r'`'
+    t_AT = r'@'
+    t_DOLLAR = r'\$'
+    t_AMPERSAND = r'\&'
     t_SLASH = r'\/'
     t_BACKSLASH = r'\\'
     t_NUMBER = r'\d+\.?\d*'
@@ -120,7 +128,7 @@ class M4Lexer(object):
 
     def t_MACROS(self, t):
         r'.*\=.*\-D\$?\(?[a-zA-Z_][a-zA-Z0-9_].*'
-        print("macros line: {}".format(t.value))
+        # print("macros line: {}".format(t.value))
         return t
 
     def t_COMMENT(self, t):
@@ -173,6 +181,7 @@ m4_macros_map = {
     "AC_MSG_ERROR": ["string", True],
     "AC_SUBST": ["ID_VAR", True, "string", False],
     "AM_CONDITIONAL": ["ID_ENV", True, "test", False],
+    "AC_MSG_WARN": ["string", True],
 }
 
 left = ['LPAREN', 'LSPAREN', 'LBRACES',]
@@ -240,7 +249,9 @@ def _check_bool_expresion(generator):
     try:
         token = generator.next()
         if token.type != "test" and token.type != "LSPAREN":
-            raise ParserError
+            logger.warning("This is a nonstandard expression")
+        option_list.append(token.value)
+
         quote_index = -1
         while token.type != "then":
             if token.type == "SEMICOLON":
@@ -293,6 +304,46 @@ def _check_sh_if(generator, level, func_name=None):
         else:
             raise ParserError
     return
+
+
+def _check_sh_case(generator, level, func_name=None):
+    try:
+        token = generator.next()
+        token_list = []
+        while token.type != "in":
+            token_list.append(token.value)
+            token = generator.next()
+        var = "".join(token_list)
+
+        end_flags = False
+        token = generator.next()
+        while not end_flags:
+            token_list = []
+            paren_count = 1
+            while paren_count > 0:
+                # or token.type != "RPAREN":
+                token_list.append(token.value)
+                token = generator.next()
+                if token.type == "LPAREN":
+                    paren_count += 1
+                elif token.type == "RPAREN":
+                    paren_count -= 1
+            value = "".join(token_list)
+
+            option = "{} = {}".format(var, value)
+            options.append(option)
+            reverses.append(False)
+            analyze(generator, analysis_type="default", func_name=func_name, level=level + 1,
+                    ends=["DOUBLE_SEMICOLON"])
+            print(level)
+            options.pop()
+            reverses.pop()
+            token = generator.next()
+
+            if token.type == "esac":
+                end_flags = True
+    except StopIteration:
+        raise ParserError
 
 
 def _cache_check_assign(generator):
@@ -354,13 +405,13 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
     quote_count = 0
     try:
         start_tokens = [generator.next() for _ in range(2)]
+        print(start_tokens)
     except StopIteration:
         raise ParserError
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
         # Double quote include data is code for c/c++ which is used to automatically generate new source file.
         # Because we don't care about them, we skip them here.
         quote_count += 2
-        token = generator.next()
         while quote_count != 0:
             token = generator.next()
             if token.type in left:
@@ -368,12 +419,11 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
             elif token.type in right:
                 quote_count -= 1
         if token.type == "RSPAREN":
+            print("??????")
             return
         else:
             raise ParserError
-    elif len(ends) != 1:
-        pass
-    elif start_tokens[0].type != "LSPAREN" and len(ends) == 1:
+    elif start_tokens[0].type != "LSPAREN" and len(ends) == 1 and ends[0] == "RSPAREN":
         # TODO: 这里其实还可能是不规范的写法，没有使用 [] 来括起一个参数域，这种情况属于不规范的方式，
         # 但是autotools可以解析，需要保持兼容
         raise ParserError
@@ -468,15 +518,19 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         pass
                     token = generator.next()
                 else:
-                    sub_quote_count = 0
+                    # sub_quote_count = 0
                     lineno = token.lineno
+                    if token.type == "ID" and next_token.type in ends:
+                        # Directly break
+                        token = next_token
+                        break
                     # When start a new line, we should end up this loop.
-                    while (next_token.type != 'RSPAREN' or sub_quote_count != 0) and \
+                    while (next_token.type != 'RSPAREN' or quote_count != 0) and \
                             next_token.lineno == lineno:
                         if next_token.type in left:
-                            sub_quote_count += 1
+                            quote_count += 1
                         if next_token.type in right:
-                            sub_quote_count -= 1
+                            quote_count -= 1
                         try:
                             next_token = generator.next()
                         except StopIteration:
@@ -565,6 +619,12 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
 
             elif token.type == "if":
                 _check_sh_if(generator, level, func_name=func_name)
+                token = generator.next()
+                if token.type == "RSPAREN":
+                    break
+
+            elif token.type == "case":
+                _check_sh_case(generator, level, func_name=func_name)
                 token = generator.next()
                 if token.type == "RSPAREN":
                     break
