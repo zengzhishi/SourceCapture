@@ -197,7 +197,7 @@ def command_exec_worker(get_item_func):
         command = job_dict.get("command", None)
 
         if file and command:
-            returncode, out, err = capture_util.subproces_calling(command, cwd=directory)
+            (returncode, out, err) = capture_util.subproces_calling(command, cwd=directory)
         else:
             logger.warning("Illegal compile_command object: %s" % json.dumps(job_dict))
             continue
@@ -499,7 +499,8 @@ class CaptureBuilder(object):
 
     def scan_project(self):
         """
-        Scan project files and get project statistic result.
+        Scan project files and get project statistic result. If present built_type analyze fail, capture will trying
+            to use default building type(other) as final building type to analyze project.
         :return:            project_scan_result     =>      json
         """
         source_infos = []
@@ -548,6 +549,10 @@ class CaptureBuilder(object):
 
         else:
             # Without any usable building tools, building default compile_commands
+            # TODO: If we check building tools successfully, but execute failed, we can use other mode.
+            # And in the other more, I plan to add original building configure file checking, and analyze them
+            # in order to get more information in building compile_commands.json.
+
             analyzer = source_detective.Analyzer(self.__root_path,
                                                  self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h = analyzer.get_project_infos()
@@ -563,8 +568,9 @@ class CaptureBuilder(object):
         return source_infos, include_files, files_count
 
     def judge_building(self):
+        """Here we will check directly executing building tools, ignore the configure file content checking."""
         if self.__build_type == "other":
-            # checking cmake
+            # checking & building cmake
             logger.info("Checking and trying to build cmake environment.")
             status, build_path = source_detective.using_cmake(self.__root_path, self.__output_path)
             if status:
@@ -573,7 +579,7 @@ class CaptureBuilder(object):
                 logger.info("Build cmake environment succes!")
                 return
 
-            # checking autotools
+            # checking & building autotools
             logger.info("Building cmake fail; Checking and trying to build autotools environment.")
             status, build_path = source_detective.using_autotools(self.__root_path, self.__output_path)
             if status:
@@ -582,7 +588,7 @@ class CaptureBuilder(object):
                 logger.info("Build configure environment succes!")
                 return
 
-            # checking Makefile
+            # checking & building Makefile
             logger.info("Building autotools fail; Checking Makefile.")
             status, build_path = source_detective.using_make(self.__root_path)
             if status:
@@ -591,7 +597,7 @@ class CaptureBuilder(object):
                 logger.info("Makefile exist!")
                 return
 
-            # checking scons
+            # checking & building scons
             logger.info("Building Makefile fail; Checking scons.")
             status, build_path = source_detective.using_scons(self.__root_path)
             if status:
@@ -763,12 +769,13 @@ def main():
                                      prefers=prefers, build_type=build_type, build_path=build_path,
                                      extra_build_args=extra_build_args)
 
-    capture_builder.judge_building()
+    if build_type == "other":
+        capture_builder.judge_building()
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # If using such build type, the last two source_infos are default items, we default not building them.
-    if build_type in ["cmake", "make", "scons"]:
+    if capture_builder.build_type in ["cmake", "make", "scons"]:
         result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)

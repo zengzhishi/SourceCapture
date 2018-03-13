@@ -11,6 +11,8 @@ import capture.utils.parse_cmake as parse_cmake
 import capture.utils.parse_make as parse_make
 import capture.utils.parse_scons as parse_scons
 
+import capture.utils.capture_util as capture_util
+
 import logging
 logger = logging.getLogger("capture")
 
@@ -83,14 +85,10 @@ def using_cmake(path, output_path, cmake_build_args=""):
         shutil.rmtree(build_folder_path)
         os.makedirs(build_folder_path)
 
-    cmd = "cd {}; cmake {} {}".format(build_folder_path, path, cmake_build_args)
-    print("excute command: %s" % cmd)
+    cmd = "cmake {} {}".format(path, cmake_build_args)
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_folder_path)
 
-    p = subprocess.Popen(cmd, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
-
-    if p.returncode == 0:
+    if returncode == 0:
         return True, build_folder_path
 
     return False, None
@@ -150,11 +148,9 @@ def using_autotools(path, output_path, configure_args=""):
         os.makedirs(build_folder_path)
 
     cmd = "{} {}".format(filename, configure_args)
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_folder_path)
 
-    p = subprocess.Popen(cmd, shell=True, cwd=build_folder_path,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
-    if p.returncode == 0:
+    if returncode == 0:
         return True, build_folder_path
 
     return False, None
@@ -177,7 +173,6 @@ def autotools_project_walk(root_path, prefers):
 
     definitions = get_definitions(root_path)
     to_walks.put((root_path, definitions))
-    present_path = ""
 
     prefer_paths = set()
     for name in prefers:
@@ -504,9 +499,9 @@ class CMakeAnalyzer(Analyzer):
 
                 # update
                 for data_dict in info_list:
-                    for file in data_dict["source_files"]:
+                    for file in data_dict.get("source_files", []):
                         used_file_s_set.add(file)
-                    for include in data_dict["includes"]:
+                    for include in data_dict.get("includes", []):
                         include_set.add(include)
                     data_dict["exec_directory"] = exec_path
                     data_dict["config_from"] = present_path
@@ -566,15 +561,18 @@ class CMakeAnalyzer(Analyzer):
         for info_list in self.selective_walk():
             info_list = list(info_list)
             for info in info_list:
-                if len(list(info["source_files"])) == 0:
+                if len(list(info.get("source_files", []))) == 0:
                     continue
-                if not info["compiler_type"]:
+                # Empty compiler_type is the undefined info list.
+                compiler_type = info.get("compiler_type")
+                if not compiler_type:
                     set_default(info)
-                    cxx_files_info["flags"].extend(info["flags"])
-                    cxx_files_info["definitions"] = info["definitions"]
-                    cxx_files_info["includes"] = info["includes"]
+                    cxx_files_info["flags"].extend(info.get("flags", []))
+                    cxx_files_info["definitions"] = info.get("definitions", [])
+                    cxx_files_info["includes"] = info.get("includes", [])
                     lefts_s = []
-                    for file in info["source_files"]:
+                    source_files = info.get("source_files", [])
+                    for file in source_files:
                         slice = file.split('.')
                         suffix = slice[-1]
                         if suffix not in source_file_suffix:
@@ -588,7 +586,7 @@ class CMakeAnalyzer(Analyzer):
                     info["source_files"] = lefts_s
                     info["compiler_type"] = "C"
                 else:
-                    files_count += len(info["source_files"])
+                    files_count += len(info.get("source_files", []))
                 source_infos.append(info)
         if len(cxx_files_info["source_files"]):
             source_infos.append(cxx_files_info)

@@ -11,7 +11,7 @@
 
 import os
 import re
-import subprocess
+import capture.utils.capture_util as capture_util
 
 import logging
 logger = logging.getLogger("capture")
@@ -40,10 +40,8 @@ def create_data_base_infos(root_path, output, makefile_name="Makefile", make_arg
     if make_args:
         cmd += make_args
 
-    p = subprocess.Popen(cmd, shell=True, cwd=root_path,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
-    output.writelines(out)
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=root_path)
+    output.writelines(out.decode("utf-8"))
     return output
 
 
@@ -197,10 +195,7 @@ def create_command_infos(build_path, output, makefile_name=None,
     else:
         cmd = "make -Bnkw -f {} {}".format(make_file, make_args)
 
-    logger.info("execute command: " + cmd)
-    p = subprocess.Popen(cmd, shell=True, cwd=build_path,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_path)
     output.write(out.decode("utf8"))
     return output
 
@@ -252,9 +247,7 @@ def strip_quotes(s):
 def excute_quote_code(s, build_dir):
     s_regax = re.match("`(.*)`(.*)", s)
     excute_cmd = s_regax.group(1)
-    p = subprocess.Popen(excute_cmd, shell=True, cwd=build_dir,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
+    (returncode, out, err) = capture_util.subproces_calling(excute_cmd, cwd=build_dir)
     value = out.strip("\n") + s_regax.group(2)
     return value
 

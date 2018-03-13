@@ -17,13 +17,13 @@ logger = logging.getLogger("capture")
 
 def subproces_calling(cmd="", cwd=None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
     try:
+        logger.info("Excute command: %s" % cmd)
         if cwd:
             p = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=stdout, stderr=stderr)
         else:
             p = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
 
         out, err = p.communicate()
-
         return p.returncode, out, err
     except (OSError, ValueError, subprocess.TimeoutExpired):
         logger.warning("Subprocess command:[%s] execute fail" % cmd)

@@ -13,6 +13,7 @@ import os
 import subprocess
 import re
 import capture.utils.parse_make as parse_make
+import capture.utils.capture_util as capture_util
 import logging
 
 
@@ -71,16 +72,13 @@ def create_command_infos(build_path, output, verbose_list, build_args=""):
             cmd = "scons -n {} {}".format(build_args, verbose)
         else:
             cmd = "scons -n {} {}=1".format(build_args, verbose)
-        logger.info("try to execute command: " + cmd)
-        p = subprocess.Popen(cmd, shell=True, cwd=build_path,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        out, err = p.communicate()
+        (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_path)
+
         if check_command_format(out):
             has_verbose = True
-            # outlines = out
             outlines = out.decode("utf-8")
             break
-        logger.info("%s; excute fail." % cmd)
+        logger.info("scons verbose name [%s] check fail." % verbose)
 
     if has_verbose:
         output.write(outlines)
