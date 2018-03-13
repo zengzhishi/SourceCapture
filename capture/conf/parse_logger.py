@@ -88,9 +88,9 @@ def getLogger(conf, logger_field="capture", new_output=None):
     """
     Config logging.
 
-    conf:                   logging.conf配置文件路径
+    conf:                   logging.conf file path
     logger_field:           logger_name
-    new_output:             是否需要重新指定输出文件
+    new_output:
     """
     logging.config.fileConfig(conf)
     logger = logging.getLogger(logger_field)

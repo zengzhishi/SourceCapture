@@ -6,7 +6,7 @@
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-29 17:45:26
     @LastModif: 2018-01-29 19:25:11
-    @Note: 用于解析cmake的文件
+    @Note: CMake Output data analysis.
 """
 
 import re
@@ -27,7 +27,7 @@ def strip_quotation(string):
 
 def set_analysis(fin):
     """
-    解析DependInfo.cmake文件的set语句设置项
+    Analyze set function in DependInfo.cmake.
     :param fin:
     :return:
     """
@@ -39,29 +39,28 @@ def set_analysis(fin):
         if len(line) == 0 or line[0] == '#':
             continue
 
-        # 获取带comment的行， 并去除行尾的注释
+        # get line with comment, and remove comment part
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
             line = re.split("\s+\#", line)[0]
 
-        # TODO: 暂时这里直接跳过，默认当做cmake产生的文件不会出错，存在隐患
         if line == ")":
             continue
 
-        # 匹配oneline config
+        # match one line config
         oneline_result = re.match("set\((\S+)\s+(\S+)\)", line)
         if oneline_result:
             config[oneline_result.group(1)] = strip_quotation(oneline_result.group(2))
             continue
 
-        # 获得到multiline config 的头
+        # match multi-line config
         start_result = re.match("set\((\S+)\s*", line)
         if start_result:
             temp_key = start_result.group(1)
             config[temp_key] = []
             continue
 
-        # 获取配置行
+        # match configure line
         args_result = re.split(r'"\s+"', line)
         if args_result[-1][-1] == ')':
             args_result[-1] = args_result[-1][:-1]
@@ -87,7 +86,7 @@ def set_analysis(fin):
 
 def parse_flags(flags_file):
     """
-    解析cmake flags.make文件
+    Analyze cmake flags.make
     :param flags_file:
     :return: final_flags, custom_flags, custom_definitions
     """
@@ -98,11 +97,11 @@ def parse_flags(flags_file):
     custom_flags = {}
     for line in fin:
         line = line.strip(' \t\n')
-        # 跳过注释和空行
+        # Skip comment and empty line
         if len(line) == 0:
             continue
         if line[0] == '#':
-            # 可能是注释行也可能是custom配置行
+            # line start with '#' can be a comment line or custom configure line
             custom_flag = re.match(r"# Custom flags: (.*)_FLAGS = (.*)", line)
             if custom_flag:
                 relative_file_path = custom_flag.group(1)
@@ -118,7 +117,7 @@ def parse_flags(flags_file):
                 file_custom_definitions = re.split(";", custom_definition_data)
                 custom_definitions[relative_file_path] = file_custom_definitions
                 continue
-        # 获取带comment的行， 并去除行尾的注释
+        # Get line with comment, and remove comment part
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
             line = re.split("\s+\#", line)[0]
@@ -144,8 +143,8 @@ def parse_flags(flags_file):
 
 def parse_cmakeInfo(depen_file):
     """
-    解析DependInfo.cmake文件
-    :param file:    DependInfo.cmake的文件路径
+    Analyze DependInfo.cmake
+    :param file:    DependInfo.cmake file path
     :return: files_s, definitions, includes
     """
     fin = open(depen_file, 'r')
@@ -156,7 +155,6 @@ def parse_cmakeInfo(depen_file):
     else:
         compiler_type = (config_dict["CMAKE_DEPENDS_LANGUAGES"],)
 
-    # 获取不同编译器的配置项
     cmake_infos = []
 
     if "CXX" in compiler_type:

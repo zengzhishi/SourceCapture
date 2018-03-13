@@ -37,11 +37,11 @@ VERBOSE_LIST = config.get("SCons", "verbose").split(',')
 
 def get_system_path(compiler):
     """
-    获取gcc系统头文件路径
+    Acquire GCC system headers path
     """
-    # 查询 c 系统头文件路径
+    # Checking c system headers
     cmd = "echo 'main(){}' | " + compiler + " -E -x c -v -"
-    # 查询 c++ 系统头文件路径
+    # Checking c++ system headers
     cpp_cmd = """echo 'main(){}' | gcc -E -x c++ -v -"""
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     retval = p.wait()
@@ -55,7 +55,6 @@ def get_system_path(compiler):
 
 
 def get_directions(path):
-    """获取指定路径下的所有目录"""
     paths = []
     for one in os.listdir(path):
         if os.path.isdir(os.path.join(path, one)):
@@ -66,12 +65,12 @@ def get_directions(path):
 # cmake project with building temp files
 def using_cmake(path, output_path, cmake_build_args=""):
     """
-    :param path:                        项目路径
-    :param output_path:                 输出路径
-    :param cmake_build_args:            cmake执行的参数
+    :param path:                        project path
+    :param output_path:
+    :param cmake_build_args:
     :return:
-        status:                         检查和执行的结果
-        build_path:                     cmake outer_build的路径
+        status:                         Checking and execution result
+        build_path:                     cmake outer_build path
     """
     filename = os.path.join(path, "CMakeLists.txt")
     if not os.path.exists(filename):
@@ -99,7 +98,7 @@ def using_cmake(path, output_path, cmake_build_args=""):
 
 def check_cmake(path, project_path, cmake_build_path):
     """
-    检查是否有CMakeList.txt
+    Checking whether there is exist CMakeLists.txt
     :param path:
     :return:        bool
     """
@@ -115,7 +114,6 @@ def check_cmake(path, project_path, cmake_build_path):
 
 def check_cmake_exec_dest_dirname(file_name):
     """
-    防止异常目录干扰
     :param file_name:
     :return:
     """
@@ -163,8 +161,7 @@ def using_autotools(path, output_path, configure_args=""):
 
 
 def get_definitions(path):
-    ## TODO 可以选择一个类来封装，使得该方法可以被重写
-    """获取当前路径下Makefile.am中的宏定义"""
+    """Simply get macros from Makefile.am"""
     cmd = "grep \"^AM_CPPFLAGS*\" " + path + "/Makefile.am | awk '{print $3}'"
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     retval = p.wait()
@@ -176,7 +173,6 @@ def get_definitions(path):
 
 
 def autotools_project_walk(root_path, prefers):
-    """目录遍历迭代器，遍历项目并获取对应的宏定义"""
     to_walks = queue.Queue()
 
     definitions = get_definitions(root_path)
@@ -210,7 +206,7 @@ def autotools_project_walk(root_path, prefers):
                     if file_path in prefer_paths:
                         to_walks.put((file_path, definitions))
                 else:
-                    if file_name[0] != '.':                         # 排除了隐藏文件
+                    if file_name[0] != '.':                         # exclude hidden file.
                         to_walks.put((file_path, definitions))
             else:
                 files.append(file_name)
@@ -220,17 +216,16 @@ def autotools_project_walk(root_path, prefers):
 
 def get_present_path_autotools(root_path, prefers):
     """
-    遍历项目的目录结构，获取project_info
+    Iterate all project folder and return project scan info
     Args:
-        root_path:          项目根目录
-        prefers:            关注路径（全选时，可能会出现example等涉及到未安装对应库的文件失败，
-                            因为configure的环境一般不管范例里面涉及的额外模块）。
+        root_path:
+        prefers:            The top level folder will be scan.
 
     Returns:
-        sub_paths:          子目录（用于添加include路径）
-        source_files:       源文件
-        include_files:      头文件
-        source_defs:        源文件编译所需要的宏定义（与源文件一一对应）
+        sub_paths:          Using in building -I flags
+        source_files:
+        include_files:
+        source_defs:        Macros
     """
     if len(prefers) == 0:
         prefers = ["src", "include", "lib", "modules"]
@@ -350,12 +345,12 @@ class SConsAnalyzer(Analyzer):
             output = open(os.path.join(self._output_path, "scons_infos.txt"), "w + b")
 
         if build_args:
-            output = parse_scons.create_command_infos(self._logger, self._build_path, output,
+            output = parse_scons.create_command_infos(self._build_path, output,
                                                       VERBOSE_LIST, build_args=build_args)
         else:
-            output = parse_scons.create_command_infos(self._logger, self._build_path, output, VERBOSE_LIST)
+            output = parse_scons.create_command_infos(self._build_path, output, VERBOSE_LIST)
         output.seek(0)
-        line_count, skip_count, compile_db = parse_scons.parse_flags(self._logger, output, self._build_path)
+        line_count, skip_count, compile_db = parse_scons.parse_flags(output, self._build_path)
         output.close()
         logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" % \
                     (line_count, skip_count))
@@ -371,15 +366,18 @@ class MakeAnalyzer(Analyzer):
                 output = tempfile.TemporaryFile()
             except ImportError:
                 output_path_file = "/tmp/make_infos.txt"
-                output = open(output_path_file, "w + b")
+                output = open(output_path_file, "w+")
         else:
-            output = open(os.path.join(self._output_path, "make_infos.txt"), "w + b")
+            output = open(os.path.join(self._output_path, "make_infos.txt"), "w+")
 
         if build_args:
             output = parse_make.create_command_infos(self._build_path, output, make_args=build_args)
         else:
             output = parse_make.create_command_infos(self._build_path, output)
+
+        output.flush()
         output.seek(0)
+
         line_count, skip_count, compile_db = parse_make.parse_flags(output, self._build_path)
         output.close()
         logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" % \
@@ -391,11 +389,9 @@ class MakeAnalyzer(Analyzer):
 class CMakeAnalyzer(Analyzer):
     def get_cmake_info(self, present_path):
         """
-        搜索指定目录下CMakeFiles中的生成目录，并解析出目录下的源文件所需要的编译参数
+        Searching project given, and analyzing CMakeFiles to strip compiler flags.
 
-        :param present_path:                            当前检索路径
-        :param project_path:                            项目根路径
-        :param cmake_build_path:                        cmake外部编译路径
+        :param present_path:                            present searching path.
         :return:
         """
         present_build_path = present_path
@@ -451,6 +447,7 @@ class CMakeAnalyzer(Analyzer):
                         })
 
         # 对于有定义CMakeLists.txt文件，但是没有配置编译选项的情况
+        # For those sources without config.
         if len(info_list) == 0:
             info_list.append({
                 "source_files": [],
@@ -463,15 +460,10 @@ class CMakeAnalyzer(Analyzer):
 
     def selective_walk(self):
         """
-        寻找根路径下project组成, 返回应该以CMake的一个set为准
+        Searching in root_project_path, and return scan result dict.
         :return:    [present_path, files_s_infos, files_h]
             files_s_infos -> list
             files_s_infos = [[files_s, flags, defs, includes, exec_path], ...]
-            其中files_s 是可以与其他元素内的重复的，最终决定编译目标文件hash的是文件名路径+编译参数
-            files_s 甚至可以能使用到其他目录的文件
-            对于没能在cmake中找到的源文件，则可以将includes继承所有，flags设置一些通用的就行，defs使用HAVE_CONFIG这种可以判断的
-            最后一组则是对剩下的未配置源文件和头文件进行整理返回
-
         """
         to_walks = queue.Queue()
         to_walks.put(self._project_path)

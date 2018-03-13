@@ -470,8 +470,8 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 token = generator.next()
                 print(token)
 
-                if token.type == "RSPAREN":
-                    break
+                # if token.type == "RSPAREN":
+                #     break
 
             elif token.type == "ID" and re.match("^A[CM]_", token.value):
                 # 2. Analyze some undefined functions started with AC | AM.
@@ -491,12 +491,11 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 if next_token.type != "RPAREN":
                     raise ParserError
                 token = generator.next()
-                if token.type == "RSPAREN":
-                    break
+                # if token.type == "RSPAREN":
+                #     break
 
-            elif token.type in ends:
-                break
-
+            # elif token.type in ends:
+            #     break
             elif token.type == "ID":
                 # 3. Analyze some assignment line, and skip some line we don't care.
                 logger.info("## Start unknown line analysis %s" % token)
@@ -535,10 +534,10 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                             next_token = generator.next()
                         except StopIteration:
                             raise ParserError
-                        token = next_token
+                    token = next_token
 
-                if token.type == "RSPAREN":
-                    break
+                # if token.type == "RSPAREN":
+                #     break
 
             elif token.type == "MACROS":
                 # 4. Analyze Macros assignment line.
@@ -614,19 +613,21 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         temp = ""
 
                 token = generator.next()
-                if token.type == "RSPAREN":
-                    break
+                # if token.type == "RSPAREN":
+                #     break
 
             elif token.type == "if":
                 _check_sh_if(generator, level, func_name=func_name)
                 token = generator.next()
-                if token.type == "RSPAREN":
-                    break
+                # if token.type == "RSPAREN":
+                #     break
 
             elif token.type == "case":
                 _check_sh_case(generator, level, func_name=func_name)
                 token = generator.next()
-                if token.type == "RSPAREN":
+                # if token.type == "RSPAREN":
+                #     break
+                if token.type in ends:
                     break
 
             elif token.type in left:
@@ -639,6 +640,9 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 # 4. Start with some undefined token, we maybe skip it.
                 # TODO: 这里缺少了对 case 的处理
                 token = generator.next()
+
+            if token.type in ends:
+                break
 
     elif analysis_type == "string":
         logger.info("## Start string analysis")

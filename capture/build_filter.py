@@ -35,7 +35,7 @@ class BuildFilter(object):
     """Check file update time, and filter file need to update"""
     default_time = time.time()
 
-    def __init__(self, output_path, host="localhost", port=6379, name_map_db=2, update_time_db=3):
+    def __init__(self, output_path, action_timeout=0.1, host="localhost", port=6379, name_map_db=2, update_time_db=3):
         """
         :param host:
         :param port:
@@ -45,6 +45,7 @@ class BuildFilter(object):
         self._output_path = output_path
         self._redis_filename = redis.Redis(host=host, port=port, db=name_map_db)
         self._redis_update_time = redis.Redis(host=host, port=port, db=update_time_db)
+        self._timeout = action_timeout
 
     def get_update_time(self, file_code):
         last_update_time = self._do_action(self._redis_update_time.get, file_code)
@@ -84,7 +85,8 @@ class BuildFilter(object):
         times = 0
         status, result = _action(action, *args, **kwargs)
         while not status and times < 3:
-            logger.warning("Redis: action: {} args: {} {} fail. Try times: {}".format(action, args, kwargs, times))
+            logger.warning("Redis: action: {} args: {} {} fail. Try times: {}".format(action.__name__, args, kwargs, times))
+            time.sleep(self._timeout)
             times += 1
             status, result = _action(action, *args, **kwargs)
         return result

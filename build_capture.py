@@ -29,18 +29,21 @@ import sys
 import argparse
 import re
 import copy
-import subprocess
 import configparser
 import hashlib
 import json
 import queue
 
-import capture.conf.parse_logger as parse_logger
 import capture.source_detective as source_detective
 import capture.building_process as building_process
 import capture.build_filter as build_filter
 
+import capture.pool.pool as pool
+import capture.utils.capture_util as capture_util
+
 import logging
+import capture.conf.parse_logger as parse_logger
+logger = logging.getLogger("capture")
 
 try:
     import redis
@@ -60,6 +63,9 @@ def load_compiler(config, compiler_map):
     compiler_ids = config.get("Compiler", "compiler_id").split(",")
     c_compilers = config.get("Compiler", "c_compiler").split(",")
     cxx_compilers = config.get("Compiler", "cxx_compiler").split(",")
+    if len(compiler_ids) != len(c_compilers) or len(cxx_compilers) != len(compiler_ids):
+        logger.critical("Compiler configure error!")
+
     for compiler_id, c_compiler, cxx_compiler in zip(compiler_ids, c_compilers, cxx_compilers):
         compiler_map[compiler_id] = {
             "CXX": cxx_compiler,
@@ -78,7 +84,82 @@ DEFAULT_MACROS = config.get("Default", "default_macros").split(",")
 DEFAULT_CXX_FLAGS = config.get("Default", "default_cxx_flags").split()
 COMPILER_COMMAND_MAP, DEFAULT_COMPILE_COMMAND = load_compiler(config, COMPILER_COMMAND_MAP)
 
-logger = logging.getLogger("capture")
+
+# def command_builder(get_item_func, result_queue, output_path, generate_bitcode):
+#     logger.info("Thread: %s start." % pool.threading.currentThread().getName())
+#     is_empty = False
+#     while not is_empty:
+#         try:
+#             job_dict = get_item_func(block=True, timeout=1.0)
+#         except queue.Empty:
+#             is_empty = True
+#             continue
+#
+#         # build args
+#         directory = job_dict["exec_directory"]
+#         flag_string = ""
+#         for flag in job_dict["flags"]:
+#             flag_string += flag + " "
+#         definition_string = ""
+#         for definition in job_dict["definitions"]:
+#             if definition.find(r'=\"') != -1:
+#                 lst = re.split(r'\\"', definition)
+#                 if len(lst) > 2:
+#                     lst[1] = lst[1].replace(" ", "\ ")
+#                     definition = lst[0] + r"\"" + lst[1] + r"\""
+#                 else:
+#                     logger.warning("definition %s analysis error" % definition)
+#             definition_string += "-D" + definition + " "
+#         include_string = ""
+#         for include in job_dict["includes"]:
+#             include_string += "-I" + include + " "
+#         args_string = flag_string + definition_string + include_string
+#
+#         sources = job_dict["source_files"]
+#         custom_flags = job_dict["custom_flags"]
+#         custom_definitions = job_dict["custom_definitions"]
+#         for i in range(len(sources)):
+#             src = sources[i]
+#             # custom
+#             custom_args_string = ""
+#             if i in custom_flags:
+#                 for flag in custom_flags[i]:
+#                     custom_args_string += flag + " "
+#             if i in custom_definitions:
+#                 for definition in custom_definitions[i]:
+#                     if definition.find(r'=\"') != -1:
+#                         lst = re.split(r'\\"', definition)
+#                         if len(lst) > 2:
+#                             # 为空格添加转义符号
+#                             lst[1] = lst[1].replace(" ", "\ ")
+#                             definition = lst[0] + r"\"" + lst[1] + r"\""
+#                         else:
+#                             logger.warning("custom definition %s analysis error" % definition)
+#                     custom_args_string += "-D" + definition + " "
+#
+#             transfer_name = file_args_MD5Calc(src, job_dict["flags"], job_dict["definitions"],
+#                                               job_dict["includes"], custom_args_string)
+#             output_command = " " + args_string
+#             output_command += custom_args_string
+#             output_command += "-c " + src + " "
+#
+#             json_dict = {
+#                 "directory": directory,
+#                 "file": src,
+#             }
+#
+#             if generate_bitcode:
+#                 output_bitcode_command = "clang" + output_command + "-flto "
+#                 if job_dict["compiler_type"] == "CXX":
+#                     output_bitcode_command = "clang++" + output_command + "-flto "
+#
+#                 output_bitcode_command += "-o " + os.path.join(output_path, transfer_name + ".bc ")
+#                 json_dict["bitcode_command"] = output_bitcode_command
+#             output_command += "-o " + os.path.join(output_path, transfer_name + ".o ")
+#
+#             output_command = COMPILER_COMMAND_MAP[job_dict["compiler_type"]] + output_command
+#             json_dict["command"] = output_command
+#             result_queue.put(json_dict)
 
 
 # 并发构建编译命令
@@ -104,112 +185,150 @@ class CommandBuilder(building_process.ProcessBuilder):
                 continue
 
             # build args
-            directory = job_dict["exec_directory"]
-            flag_string = ""
-            for flag in job_dict["flags"]:
-                flag_string += flag + " "
-            definition_string = ""
-            for definition in job_dict["definitions"]:
-                if definition.find(r'=\"') != -1:
-                    lst = re.split(r'\\"', definition)
-                    if len(lst) > 2:
-                        # 为空格添加转义符号
-                        lst[1] = lst[1].replace(" ", "\ ")
-                        definition = lst[0] + r"\"" + lst[1] + r"\""
-                    else:
-                        logger.warning("definition %s analysis error" % definition)
-                definition_string += "-D" + definition + " "
-            include_string = ""
-            for include in job_dict["includes"]:
-                include_string += "-I" + include + " "
-            args_string = flag_string + definition_string + include_string
+            try:
+                directory = job_dict.get("exec_directory", os.path.curdir)
+                sources = job_dict.get("source_files", [])
+                custom_flags = job_dict.get("custom_flags", [])
+                custom_definitions = job_dict.get("custom_definitions", [])
+                global_flags = job_dict.get("flags", [])
+                definitions = job_dict.get("definitions", [])
+                includes = job_dict.get("includes", [])
+                compiler_type = job_dict.get("compiler_type", "CXX")
 
-            sources = job_dict["source_files"]
-            custom_flags = job_dict["custom_flags"]
-            custom_definitions = job_dict["custom_definitions"]
-            for i in range(len(sources)):
-                src = sources[i]
-                # custom
-                custom_args_string = ""
-                if i in custom_flags:
-                    for flag in custom_flags[i]:
-                        custom_args_string += flag + " "
-                if i in custom_definitions:
-                    for definition in custom_definitions[i]:
-                        if definition.find(r'=\"') != -1:
-                            lst = re.split(r'\\"', definition)
-                            if len(lst) > 2:
-                                # 为空格添加转义符号
-                                lst[1] = lst[1].replace(" ", "\ ")
-                                definition = lst[0] + r"\"" + lst[1] + r"\""
-                            else:
-                                logger.warning("custom definition %s analysis error" % definition)
-                        custom_args_string += "-D" + definition + " "
+                flag_string = ""
+                for flag in global_flags:
+                    flag_string += flag + " "
+                definition_string = ""
+                for definition in definitions:
+                    if definition.find(r'=\"') != -1:
+                        lst = re.split(r'\\"', definition)
+                        if len(lst) > 2:
+                            lst[1] = lst[1].replace(" ", "\ ")
+                            definition = lst[0] + r"\"" + lst[1] + r"\""
+                        else:
+                            logger.warning("definition %s analysis error" % definition)
+                    definition_string += "-D" + definition + " "
+                include_string = ""
+                for include in includes:
+                    include_string += "-I" + include + " "
+                args_string = flag_string + definition_string + include_string
 
-                transfer_name = file_args_MD5Calc(src, job_dict["flags"], \
-                                                  job_dict["definitions"], job_dict["includes"], custom_args_string)
-                output_command = " " + args_string
-                output_command += custom_args_string
-                output_command += "-c " + src + " "
+                # custom flags
+                for i, src in enumerate(sources):
+                    custom_args_string = ""
+                    if i in custom_flags:
+                        for flag in custom_flags[i]:
+                            custom_args_string += flag + " "
+                    if i in custom_definitions:
+                        for definition in custom_definitions[i]:
+                            if definition.find(r'=\"') != -1:
+                                lst = re.split(r'\\"', definition)
+                                if len(lst) > 2:
+                                    lst[1] = lst[1].replace(" ", "\ ")
+                                    definition = lst[0] + r"\"" + lst[1] + r"\""
+                                else:
+                                    logger.warning("custom definition %s analysis error" % definition)
+                            custom_args_string += "-D" + definition + " "
 
-                json_dict = {
-                    "directory": directory,
-                    "file": src,
-                }
+                    transfer_name = file_args_MD5Calc(src, global_flags, definitions, includes, custom_args_string)
+                    output_command = " " + args_string
+                    output_command += custom_args_string
+                    output_command += "-c " + src + " "
 
-                if self.generate_bitcode:
-                    output_bitcode_command = "clang" + output_command + "-flto "
-                    if job_dict["compiler_type"] == "CXX":
-                        output_bitcode_command = "clang++" + output_command + "-flto "
+                    json_dict = {
+                        "directory": directory,
+                        "file": src,
+                    }
 
-                    output_bitcode_command += "-o " + os.path.join(self.output_path, transfer_name + ".bc ")
-                    json_dict["bitcode_command"] = output_bitcode_command
-                output_command += "-o " + os.path.join(self.output_path, transfer_name + ".o ")
+                    if self.generate_bitcode:
+                        output_bitcode_command = "clang" + output_command + "-flto "
+                        if job_dict["compiler_type"] == "CXX":
+                            output_bitcode_command = "clang++" + output_command + "-flto "
 
-                output_command = self.compile_command[job_dict["compiler_type"]] + output_command
-                json_dict["command"] = output_command
-                result.append(json_dict)
+                        output_bitcode_command += "-o " + os.path.join(self.output_path, transfer_name + ".bc ")
+                        json_dict["bitcode_command"] = output_bitcode_command
+                    output_command += "-o " + os.path.join(self.output_path, transfer_name + ".o ")
+
+                    output_command = self.compile_command.get(compiler_type, "g++")\
+                                     + output_command
+                    json_dict["command"] = output_command
+                    result.append(json_dict)
+            except Exception:
+                logger.warning("Building command of [{}] fail.".format(json.dumps(job_dict)))
 
         logger.info("Process pid:%d Complete." % pid)
         return
 
 
-class CommandExec(building_process.ProcessBuilder):
-    """Multiprocess mission for executing compile commands."""
-    def mission(self, q, result):
+def command_exec_worker(get_item_func):
+    logger.info("Thread: %s start." % pool.threading.currentThread().getName())
+    is_empty = False
+    while not is_empty:
+        try:
+            job_dict = get_item_func(block=True, timeout=1.0)
+        except queue.Empty:
+            is_empty = True
+            continue
 
-        pid = os.getpid()
-        self._logger.info("Process pid:%d start." % pid)
-        is_empty = False
-        while not is_empty:
-            try:
-                job_dict = q.get(block=True, timeout=self.timeout)
-            except queue.Empty:
-                is_empty = True
-                continue
+        directory = job_dict.get("directory", None)
+        file = job_dict.get("file", None)
+        command = job_dict.get("command", None)
 
-            directory = job_dict["directory"]
-            file = job_dict["file"]
-            command = job_dict["command"]
+        if file and command:
+            returncode, out, err = capture_util.subproces_calling(command, cwd=directory)
+        else:
+            logger.warning("Illegal compile_command object: %s" % json.dumps(job_dict))
+            continue
 
-            p = subprocess.Popen(command, shell=True, cwd=directory,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if out:
+            logger.info(" CC Building {}\n{}".format(file, out))
+        else:
+            logger.info(" CC Building {}".format(file))
 
-            out, err = p.communicate()
-            if out:
-                self._logger.info(" CC Building {}\n{}".format(file, out))
-            else:
-                self._logger.info(" CC Building {}".format(file))
-
-            if p.returncode != 0:
-                self._logger.debug("compile: %s fail" % file)
-            else:
-                self._logger.debug("compile: %s success" % file)
-
-        self._logger.info("Process pid:%d Complete." % pid)
-        return
+        if returncode != 0:
+            logger.debug("compile: %s fail" % file)
+        else:
+            logger.debug("compile: %s success" % file)
+    logger.info("Thread: %s stop." % pool.threading.currentThread().getName())
+    return
 
 
+# class CommandExec(building_process.ProcessBuilder):
+#     """Multiprocess mission for executing compile commands."""
+#     def mission(self, q, result):
+#
+#         pid = os.getpid()
+#         self._logger.info("Process pid:%d start." % pid)
+#         is_empty = False
+#         while not is_empty:
+#             try:
+#                 job_dict = q.get(block=True, timeout=self.timeout)
+#             except queue.Empty:
+#                 is_empty = True
+#                 continue
+#
+#             directory = job_dict["directory"]
+#             file = job_dict["file"]
+#             command = job_dict["command"]
+#
+#             p = subprocess.Popen(command, shell=True, cwd=directory,
+#                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+#
+#             out, err = p.communicate()
+#             if out:
+#                 self._logger.info(" CC Building {}\n{}".format(file, out))
+#             else:
+#                 self._logger.info(" CC Building {}".format(file))
+#
+#             if p.returncode != 0:
+#                 self._logger.debug("compile: %s fail" % file)
+#             else:
+#                 self._logger.debug("compile: %s success" % file)
+#
+#         self._logger.info("Process pid:%d Complete." % pid)
+#         return
+#
+#
 def bigFileMD5Calc(file):
     """Update file MD5, by reading chunk by chunk."""
     m = hashlib.md5()
@@ -227,7 +346,6 @@ def bigFileMD5Calc(file):
 
 
 def fileMD5Calc(file):
-    """直接读取计算文件MD5"""
     """Directly reading file content and calculate MD5."""
     m = hashlib.md5()
     m.update(file)
@@ -304,8 +422,12 @@ def commands_dump(output_path, compile_commands):
         output_path:
         compile_commands:       data needed for building compile_commands.json
     """
-    with open(output_path, 'w') as fout:
-        json.dump(compile_commands, fout, indent=4)
+    try:
+        with open(output_path, 'w') as fout:
+            json.dump(compile_commands, fout, indent=4)
+    except json.JSONDecodeError:
+        logger.critical("Dumping")
+
     return
 
 
@@ -347,7 +469,6 @@ def scan_data_dump(output_path, scan_data, compile_commands=None, saving_to_db=F
 
 
 class CaptureBuilder(object):
-    """主要的编译构建脚本生成类"""
     def __init__(self, root_path,
                  output_path=None,
                  build_type=DEFAULT_BUILDING_TYPE,
@@ -362,7 +483,6 @@ class CaptureBuilder(object):
         self.__root_path = os.path.abspath(root_path)
         self.__build_type = build_type
 
-        # 先这样先
         if build_path:
             self.__build_path = build_path
         else:
@@ -409,7 +529,7 @@ class CaptureBuilder(object):
         cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in ["cxx", "cpp", "cc"] else False,
                            files_s)
         c_file_infos = {
-            "source_files": c_files,
+            "source_files": list(c_files),
             "includes": list(global_includes),
             "definitions": DEFAULT_MACROS,
             "flags": DEFAULT_FLAGS,
@@ -419,8 +539,21 @@ class CaptureBuilder(object):
             "custom_definitions": [],
             "config_from": []
         }
-        cxx_file_infos = copy.deepcopy(c_file_infos)
-        cxx_file_infos["source_files"] = cpp_files
+
+        try:
+            cxx_file_infos = copy.deepcopy(c_file_infos)
+        except copy.Error:
+            logger.warning("cxx_file_infos copy fail.")
+            cxx_file_infos = {
+                "includes": list(global_includes),
+                "definitions": DEFAULT_MACROS,
+                "exec_directory": self.__build_path if self.__build_path else self.__root_path,
+                "custom_flags": [],
+                "custom_definitions": [],
+                "config_from": []
+            }
+
+        cxx_file_infos["source_files"] = list(cpp_files)
         cxx_file_infos["compiler_type"] = "CXX"
         cxx_file_infos["flags"].extend(DEFAULT_CXX_FLAGS)
         source_infos.append(c_file_infos)
@@ -430,19 +563,27 @@ class CaptureBuilder(object):
         include_files = files_h
         files_count = len(files_s)
         source_infos = []
+        sources_refers = set()
         # get make prebuild command
         for command_info in compile_db:
-            source_file = command_info["file"]
-            directory = command_info["directory"]
-            flags = command_info["arguments"]
-            if os.path.isabs(source_file[0]):
-                source_file = os.path.abspath(directory + os.path.sep + source_file)
+            source_file = command_info.get("file", None)
+            directory = command_info.get("directory", None)
+            flags = command_info.get("arguments", [])
+
+            if not source_file and not directory:
+                logger.warning("Unknown command info analysis from 'make -n': %s" % json.dumps(command_info))
+                continue
+
+            if source_file and not os.path.isabs(source_file):
+                source_file = os.path.abspath(os.path.join(directory, source_file))
 
             # exclude prebuilded source files from project total sources
             try:
                 files_s.remove(source_file)
+                sources_refers.add(source_file)
             except ValueError:
-                logger.warning("file: %s not found, is compiled multi-times or project scan error!" % (source_file))
+                if source_file not in sources_refers:
+                    logger.warning("file: %s not found, project scan error!" % (source_file))
 
             includes = filter(lambda flag: True if flag[:2] == "-I" else False, flags)
             final_includes = map(lambda flag: flag[2:] if flag[2] != ' ' else flag[3:], includes)
@@ -457,7 +598,7 @@ class CaptureBuilder(object):
                 "definitions": list(final_definitions),
                 "includes": list(final_includes),
                 "flags": list(final_flags),
-                "exec_directory": command_info["directory"],
+                "exec_directory": directory,
                 "compiler_type": command_info["compiler"],
                 "custom_flags": [],
                 "custom_definitions": [],
@@ -472,7 +613,7 @@ class CaptureBuilder(object):
 
     def scan_project(self):
         """
-        扫描项目文件，获取项目统计信息，并保留扫描结果，用于构建编译命令
+        Scan project files and get project statistic result.
         :return:            project_scan_result     =>      json
         """
         source_infos = []
@@ -509,7 +650,7 @@ class CaptureBuilder(object):
                                                                                 compile_db)
 
         else:
-            # 连构建脚本都没有，直接构建
+            # Without any usable building tools, building default compile_commands
             analyzer = source_detective.Analyzer(self.__root_path,
                                                  self.__output_path, self.__prefers, self.__build_path)
             sub_paths, files_s, files_h = analyzer.get_project_infos()
@@ -526,7 +667,7 @@ class CaptureBuilder(object):
 
     def judge_building(self):
         if self.__build_type == "other":
-            # 检查 cmake
+            # checking cmake
             logger.info("Checking and trying to build cmake environment.")
             status, build_path = source_detective.using_cmake(self.__root_path, self.__output_path)
             if status:
@@ -535,7 +676,7 @@ class CaptureBuilder(object):
                 logger.info("Build cmake environment succes!")
                 return
 
-            # 检查 autotools
+            # checking autotools
             logger.info("Building cmake fail; Checking and trying to build autotools environment.")
             status, build_path = source_detective.using_autotools(self.__root_path, self.__output_path)
             if status:
@@ -544,7 +685,7 @@ class CaptureBuilder(object):
                 logger.info("Build configure environment succes!")
                 return
 
-            # 检查 Makefile
+            # checking Makefile
             logger.info("Building autotools fail; Checking Makefile.")
             status, build_path = source_detective.using_make(self.__root_path)
             if status:
@@ -553,7 +694,7 @@ class CaptureBuilder(object):
                 logger.info("Makefile exist!")
                 return
 
-            # 检查 scons
+            # checking scons
             logger.info("Building Makefile fail; Checking scons.")
             status, build_path = source_detective.using_scons(self.__root_path)
             if status:
@@ -592,8 +733,8 @@ class CaptureBuilder(object):
     def command_filter(self, compile_commands, bc_compile_commands, update_all=False):
         commands = copy.deepcopy(compile_commands)
         commands.extend(bc_compile_commands)
-        output_list = commands
         logger.info("All compile_commands count: %d" % len(commands))
+
         build_filter_ins = build_filter.BuildFilter(self.__output_path)
         transfer_names = map(lambda obj: source_path_MD5Calc(obj["file"]), commands)
         output_list = build_filter_ins.filter_building_source(list(transfer_names), commands, update_all)
@@ -602,10 +743,16 @@ class CaptureBuilder(object):
         return output_list
 
     def command_exec(self, commands):
-        command_exec = CommandExec(timeout=1.0)
-        command_exec.distribute_jobs(commands)
-        command_exec.run()
-        return
+        thread_pool = pool.Pool(command_exec_worker)
+        for item in commands:
+            thread_pool.add_item(item)
+        try:
+            thread_pool.init_thread_pool(thread_pool.get_item)
+            thread_pool.join_thread_pool()
+        except KeyboardInterrupt:
+            thread_pool.set_terminated()
+            logger.critical("Command_exec thread pool has terminated.")
+            sys.exit(-1)
 
 
 def parse_prefer_str(prefer_str, input_path):
@@ -618,23 +765,27 @@ def parse_prefer_str(prefer_str, input_path):
 
 
 def main():
-    """主要逻辑
+    """
+        The process of build_capture.py:
 
-        如果输入的参数只有 project_root_path 和 result_output_path, 则采用的是默认配置，需要加入build_type的试错，选择一个比较合理的构建方式
-        1. 如果项目中有CMakeList.txt文件，将优先选择使用CMake方式构建，
-            i. 在output_path路径下创建一个build目录
-            ii. 进入build目录后执行 cmake ${project_root_path} 产生cmake的输出
-            iii. 如果cmake构建成功，进入cmake解析，并最终输出结果
-                如果cmake构建失败，则进行其他方式的匹配（暂定，后面需要完成不需要cmake完整执行也能尽可能解析的办法）
-        2. 如果项目中有configure可执行文件，则使用autotools构建，
-            i. 在output_path路径下创建一个build目录
-            ii. 进入build目录后执行 ./configure ${project_root_path} 产生Makefile
-            iii. 执行成功，将build_path设置为build的目录，进入步骤3,
-                失败则直接进入步骤4
-        3. 如果项目中有SConstruct文件，则使用scons构建
-        4. 如果build_path不为空，则在build_path中执行make -nkw的解析
-            如果build_path为空，则在root_path中执行解析
-        5. 如果以上方式都失败了，直接使用默认参数来生成gcc命令了
+        If the input arguments are `project_root_path` and `result_output_path`, will use default configure.
+        The default more will firstly setting build_type as other, and step by step checking usable building type.
+
+        1. If there is a CMakeLists.txt file in project. We will set build_type=cmake.
+            i. Create a new directory named 'build' under result_output_path
+            ii. Move in 'build', and execute command: `cmake ${project_root_path}` to building cmake_building info.
+            iii. If cmake building success, entry the cmake analysis process.
+                If cmake building fail, will continue other checking.
+        2. I there is a 'configure' in root_project_path, using autotools building. set build_type=make.
+            i. same as 1.i.
+            ii. Move in 'build', and execute command: `${project_root_path}/configure` to building configure info.
+            iii. If configure success, set build_path as build, and go to make -n analysis.
+                If configure fail, will continue other checking.
+        3. If there is a 'SConstruct' in project_root_path, using scons building. set build_type=scons.
+            go to scons -n analysis.
+           If no 'SConstruct', continue other checking.
+        4. If there is a 'Makefile' in project_root_path, using make -n building. set build_type=make.
+        5. If 1-4 checking are all fail, we may using default command builder. set build_type=other.
 
     """
     parser = argparse.ArgumentParser(description="")
@@ -688,12 +839,12 @@ def main():
 
     # parse_logger.addConsoleHandler()
     #
-    # if input_path is None or output_path is None:
-    #     logger.critical("Please input project path to scan and output path.")
-    #     sys.exit(-1)
-    #
-    # if len(input_path) > 1 and input_path[-1] == '/':
-    #     input_path = input_path[:-1]
+    if input_path is None or output_path is None:
+        logger.critical("Please input project path to scan and output path.")
+        sys.exit(-1)
+
+    if len(input_path) > 1 and input_path[-1] == '/':
+        input_path = input_path[:-1]
 
     logger_path = os.path.join(output_path, "capture.log")
     parse_logger.addFileHandler(logger_path, "capture")
@@ -719,7 +870,7 @@ def main():
     source_infos, include_files, files_count = capture_builder.scan_project()
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
-    # 暂时不编译cmake和Makefile未定义的源文件
+    # If using such build type, the last two source_infos are default items, we default not building them.
     if build_type in ["cmake", "make", "scons"]:
         result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
@@ -727,8 +878,9 @@ def main():
 
     filter_result = capture_builder.command_filter(result, bc_result, update_all)
     if not just_print:
-        logging.info("Start building object file and bc file")
+        logger.info("Start building object file and bc file.")
         capture_builder.command_exec(filter_result)
+        logger.info("Building object file and bc file completed.")
     else:
         files = list(map(lambda x: x["file"], filter_result))
         files = sorted(files)

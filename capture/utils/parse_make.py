@@ -23,10 +23,9 @@ DEFAULT_MAKEFILE_NAME = [
 ]
 
 
-# 使用 make -qp 获取执行的编译命令， 在修改Makefile 执行伪目标获取参数的方法
+# Using make -qp to get compiler commands
 def create_data_base_infos(root_path, output, makefile_name="Makefile", make_args=None):
     """
-    创建info文件
     :param root_path:
     :param output_path:
     :param makefile_name:
@@ -49,11 +48,9 @@ def create_data_base_infos(root_path, output, makefile_name="Makefile", make_arg
 
 
 def block_read(fin):
-    # 去掉block前的空行
     line = fin.readline()
     while not line.strip("\n"):
         line = fin.readline()
-    # 存储block的数据
     lines = []
     while line.strip("\n") != "":
         lines.append(line.strip("\n"))
@@ -62,7 +59,6 @@ def block_read(fin):
 
 
 def search_target_line(lines):
-    """如果有多个配置行，获取EXTRA config，并找到target line"""
     pravite_config_lines = []
     for line in lines:
         config_line_match = re.match("^\w+.*\s*:\s*", line)
@@ -77,23 +73,19 @@ def search_target_line(lines):
 
 def analysis_block(lines):
     """
-    解析块行的配置,得到目标文件所需要的参数
     :param lines:
     :return:
     """
     target_line = 0
-    # 非目标, 可能是依赖文件或内置对象
     if lines[0] == "# Not a target:":
         return {}
     elif lines[0] == '# makefile (from \'Makefile\'':
-        # 可能会导致问题
         target_line += 1
 
     if target_line != 0:
         target_line = search_target_line(lines)
         target, depend = re.split("\s*:\s*", lines[target_line])
     if len(depend) == 0:
-        # 伪目标, 暂时先不管, 后面有需要再完成
         params_dict = {}
     else:
         targets = re.split("\s+", target)
@@ -126,9 +118,8 @@ def analysis_block(lines):
 
 def print_info_analysis(output_path, targets=None):
     """
-    解析文件的内容, 获取目标文件所需要的参数
     :param output_path:
-    :param targets: 如果为None, 则默认把所有非伪目标的编译命令参数都获取回来
+    :param targets:
     :return:
     """
     fin = open(os.path.join(output_path, "make_info.txt"), "r")
@@ -136,31 +127,24 @@ def print_info_analysis(output_path, targets=None):
     all_params_dicts = []
     line = fin.readline()
     while line != '':
-        # 1. 先找到目标行
         while line.strip("\n") != '# Files':
             line = fin.readline()
-        # 2. 开始读取配置块
         lines = block_read(fin)
         while lines[-1] != "# VPATH Search Paths":
-            # 3. 解析块
             config_param = analysis_block(lines)
             if len(config_param) == 0:
-                # 非目标
                 pass
             else:
-                # 目标
                 all_params_dicts.append(config_param)
                 for arg in config_param["need_params"]:
                     all_need_params.append(arg)
             lines = block_read(fin)
-        # 3. Files区读取完毕,继续跳过
     return all_params_dicts, all_need_params
 
 
 def modify_makefile(echo_args, root_path,
                     makefile, new_makefile, phony_target="capture_echo_values"):
     """
-    复制原来的makefile, 并将参数输出的伪目标语句加入到新的Makefile中, 形成新的makefile
     :param echo_args:
     :param root_path:
     :param makefile:
@@ -173,7 +157,6 @@ def modify_makefile(echo_args, root_path,
 
 def exec_makefile(new_makefile, field_name):
     """
-    执行修改之后的makefile的伪目标, 并将参数的结果解析之后返回
     :param new_makefile:
     :param field_name:
     :return:
@@ -199,7 +182,7 @@ def check_makefile(build_path, makefile_name=None):
     return is_exist
 
 
-# 使用 make -Bnkw 方式获取编译命令的方法
+# Using make -Bnkw to get compiler commands
 def create_command_infos(build_path, output, makefile_name=None,
                  make_args=""):
     make_file = makefile_name
@@ -217,7 +200,7 @@ def create_command_infos(build_path, output, makefile_name=None,
     p = subprocess.Popen(cmd, shell=True, cwd=build_path,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, err = p.communicate()
-    output.writelines(out)
+    output.write(out.decode("utf8"))
     return output
 
 

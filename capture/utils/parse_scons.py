@@ -84,7 +84,7 @@ def create_command_infos(build_path, output, verbose_list, build_args=""):
     return output
 
 
-def parse_flags(logger, build_log_in, build_dir,
+def parse_flags(build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     """Compiler commands analysis may be similar process with make -n"""
     return parse_make.parse_flags(build_log_in, build_dir,

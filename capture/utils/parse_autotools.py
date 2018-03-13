@@ -121,8 +121,7 @@ class AutoToolsParser(object):
 
     def set_makefile_am(self, project_scan_result):
         """
-        TODO: 将source_detective扫描到的Makefile.am，或Makefile.in文件输入进来
-        :param project_scan_result:                     project scan result
+        :param project_scan_result:                     project scan result from source_detective
         :return:
         """
         for file_path in project_scan_result:
@@ -190,11 +189,11 @@ class AutoToolsParser(object):
                 value = assig_match.group(2) if assig_match else append_match.group(2)
 
                 if key not in am_pair_var:
-                    # TODO: 如果是在全局变量的一次替换，将创建一个名称为 "default_N" 的option来存储（N可以用来存储多个,多次更改）
                     am_pair_var[key] = {
                         "defined": [],
                         "undefined": [],
-                        "is_replace": False,  # 表示在这一级将做一个替换, 第一级默认为False，default_N必定为True
+                        "is_replace": False,
+                        # Represent whether to replace variable's value here. For default_N, it may be always True.
                         "option": {}
                     }
 
@@ -240,7 +239,6 @@ class AutoToolsParser(object):
                     slices.append(temp)
                     slices.reverse()
                     transfer_word = "".join(slices)
-                    # 获取当前的option状态
                     if _check_undefined(slices):
                         present_option_dict["undefined"].append(transfer_word)
                     else:
@@ -327,15 +325,6 @@ class AutoToolsParser(object):
             self._logger.warning("Couldn't read configure.ac file")
 
     def _load_configure_ac_info(self, ac_variables):
-        # TODO: 针对与configure.ac 及其 m4 宏的解析
-        # 1. 解析获得 m4 宏定义有哪些，构造一个引用函数表， ps: 对于搞不懂如何解析的部分直接跳过吧，不要强求
-        # 2. 引用则查函数表，如果有则解析那部分的数据，或者是先解析完，这里是拷贝解析后的数据
-        # 3. 关注的主要是：
-        #    i. 赋值语句 重点关注的是被subst的变量和默认传递变量
-        #   ii. AC_ARG_WITH 和 AC_ARG_ENABLE 关键是获取到default的方式, option的方式暂时不做详细,
-        #       重点是关注这边导致的conditional变化
-        #  iii. AC_SUBST
-
         if not self._fhandle_configure_ac:
             raise IOError("loading configure.ac or configure.in fail.")
         option_regexs = (
@@ -413,6 +402,7 @@ class AutoToolsParser(object):
 
     def _m4_file_analysis(self, fin):
         """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
+        """Loading m4 file, and building an info map."""
         import capture.utils.m4_macros_analysis as m4_macros_analysis
         lexer = m4_macros_analysis.M4Lexer()
         lexer.build()
@@ -466,10 +456,7 @@ class AutoToolsParser(object):
                         analyze_type = M4_MACROS_ARGS_COUNT[func_pos[-1][0]][func_pos[-1][1]]
 
 
-
-
     def _m4_block_reader(self, fin, size=1024):
-        """按行方式来逐步读取"""
         data = ""
         while size > 0:
             try:
@@ -494,7 +481,6 @@ def unbalanced_quotes(s):
         if c == "`":
             excute += 1
 
-    # 去除转义后的引号带来的影响
     move_double = s.count('\\"')
     move_single = s.count("\\'")
     single -= move_single
