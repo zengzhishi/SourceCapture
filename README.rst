@@ -9,7 +9,7 @@ A compiler command building project.
 说明
 ========
 
-capture 能捕获一个Makefile构建的项目中，源文件的编译命令，生成compile_command.json文件，并存储项目的扫描统计数据。
+capture 能捕获一个 Makefile, CMake, Autotools 和 SConstruct 构建的项目中，源文件的编译命令，生成compile_command.json文件，并存储项目的扫描统计数据。
 python 版本支持 Python 3.6.2 
 
 * requirements.txt 中是capture执行时，依赖的模块
