@@ -17,7 +17,7 @@ logger = logging.getLogger("capture")
 
 def subproces_calling(cmd="", cwd=None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
     try:
-        logger.info("Excute command: %s" % cmd)
+        logger.debug("Excute command: %s" % cmd)
         if cwd:
             p = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=stdout, stderr=stderr)
         else:

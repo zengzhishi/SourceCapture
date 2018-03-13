@@ -726,28 +726,25 @@ def main():
                         help="Just output compile_commands.json and other info, without running commands.")
 
     args = vars(parser.parse_args())
+
     input_path = args.get("project_root_path", None)
     output_path = args.get("result_output_path", None)
-
-    build_type = args["build_type"]
-    compiler_id = args["compiler_id"]
-    prefers = args["prefers"]
-
-    generate_bitcode = args["generate_bitcode"]
+    build_type = args.get("build_type", "other")
+    compiler_id = args.get("compiler_id", "GNU")
+    prefers = args.get("prefers", "all")
+    generate_bitcode = args.get("generate_bitcode", False)
     just_print = args.get("just_print", False)
-    update_all = args["update_all"]
-
-    build_path = args.get("build_path", "")
+    update_all = args.get("update_all", False)
     extra_build_args = args.get("extra_build_args", "")
+    build_path = args.get("build_path", "")
 
     # parse_logger.addConsoleHandler()
-    #
     if input_path is None or output_path is None:
         logger.critical("Please input project path to scan and output path.")
         sys.exit(-1)
 
-    if len(input_path) > 1 and input_path[-1] == '/':
-        input_path = input_path[:-1]
+    input_path = os.path.abspath(input_path)
+    output_path = os.path.abspath(output_path)
 
     logger_path = os.path.join(output_path, "capture.log")
     parse_logger.addFileHandler(logger_path, "capture")
@@ -786,11 +783,13 @@ def main():
         capture_builder.command_exec(filter_result)
         logger.info("Building object file and bc file completed.")
     else:
-        files = list(map(lambda x: x["file"], filter_result))
+        files = map(lambda x: x.get("file", ""), filter_result)
         files = sorted(files)
-        with open(os.path.join(output_path, "files.out"), "w") as fout:
+        file_name = "files_need_to_compile.txt"
+        with open(os.path.join(output_path, file_name), "w") as fout:
             for file in files:
                 fout.write(file + "\n")
+        logger.info("Dumping files need to compile in %s." % file_name)
 
 
 if __name__ == "__main__":
