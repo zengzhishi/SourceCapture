@@ -85,84 +85,6 @@ DEFAULT_CXX_FLAGS = config.get("Default", "default_cxx_flags").split()
 COMPILER_COMMAND_MAP, DEFAULT_COMPILE_COMMAND = load_compiler(config, COMPILER_COMMAND_MAP)
 
 
-# def command_builder(get_item_func, result_queue, output_path, generate_bitcode):
-#     logger.info("Thread: %s start." % pool.threading.currentThread().getName())
-#     is_empty = False
-#     while not is_empty:
-#         try:
-#             job_dict = get_item_func(block=True, timeout=1.0)
-#         except queue.Empty:
-#             is_empty = True
-#             continue
-#
-#         # build args
-#         directory = job_dict["exec_directory"]
-#         flag_string = ""
-#         for flag in job_dict["flags"]:
-#             flag_string += flag + " "
-#         definition_string = ""
-#         for definition in job_dict["definitions"]:
-#             if definition.find(r'=\"') != -1:
-#                 lst = re.split(r'\\"', definition)
-#                 if len(lst) > 2:
-#                     lst[1] = lst[1].replace(" ", "\ ")
-#                     definition = lst[0] + r"\"" + lst[1] + r"\""
-#                 else:
-#                     logger.warning("definition %s analysis error" % definition)
-#             definition_string += "-D" + definition + " "
-#         include_string = ""
-#         for include in job_dict["includes"]:
-#             include_string += "-I" + include + " "
-#         args_string = flag_string + definition_string + include_string
-#
-#         sources = job_dict["source_files"]
-#         custom_flags = job_dict["custom_flags"]
-#         custom_definitions = job_dict["custom_definitions"]
-#         for i in range(len(sources)):
-#             src = sources[i]
-#             # custom
-#             custom_args_string = ""
-#             if i in custom_flags:
-#                 for flag in custom_flags[i]:
-#                     custom_args_string += flag + " "
-#             if i in custom_definitions:
-#                 for definition in custom_definitions[i]:
-#                     if definition.find(r'=\"') != -1:
-#                         lst = re.split(r'\\"', definition)
-#                         if len(lst) > 2:
-#                             # 为空格添加转义符号
-#                             lst[1] = lst[1].replace(" ", "\ ")
-#                             definition = lst[0] + r"\"" + lst[1] + r"\""
-#                         else:
-#                             logger.warning("custom definition %s analysis error" % definition)
-#                     custom_args_string += "-D" + definition + " "
-#
-#             transfer_name = file_args_MD5Calc(src, job_dict["flags"], job_dict["definitions"],
-#                                               job_dict["includes"], custom_args_string)
-#             output_command = " " + args_string
-#             output_command += custom_args_string
-#             output_command += "-c " + src + " "
-#
-#             json_dict = {
-#                 "directory": directory,
-#                 "file": src,
-#             }
-#
-#             if generate_bitcode:
-#                 output_bitcode_command = "clang" + output_command + "-flto "
-#                 if job_dict["compiler_type"] == "CXX":
-#                     output_bitcode_command = "clang++" + output_command + "-flto "
-#
-#                 output_bitcode_command += "-o " + os.path.join(output_path, transfer_name + ".bc ")
-#                 json_dict["bitcode_command"] = output_bitcode_command
-#             output_command += "-o " + os.path.join(output_path, transfer_name + ".o ")
-#
-#             output_command = COMPILER_COMMAND_MAP[job_dict["compiler_type"]] + output_command
-#             json_dict["command"] = output_command
-#             result_queue.put(json_dict)
-
-
-# 并发构建编译命令
 class CommandBuilder(building_process.ProcessBuilder):
     """Multiprocess for building compile commands."""
     def redis_setting(self, host="localhost", port=6379, db=0):
@@ -293,42 +215,6 @@ def command_exec_worker(get_item_func):
     return
 
 
-# class CommandExec(building_process.ProcessBuilder):
-#     """Multiprocess mission for executing compile commands."""
-#     def mission(self, q, result):
-#
-#         pid = os.getpid()
-#         self._logger.info("Process pid:%d start." % pid)
-#         is_empty = False
-#         while not is_empty:
-#             try:
-#                 job_dict = q.get(block=True, timeout=self.timeout)
-#             except queue.Empty:
-#                 is_empty = True
-#                 continue
-#
-#             directory = job_dict["directory"]
-#             file = job_dict["file"]
-#             command = job_dict["command"]
-#
-#             p = subprocess.Popen(command, shell=True, cwd=directory,
-#                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-#
-#             out, err = p.communicate()
-#             if out:
-#                 self._logger.info(" CC Building {}\n{}".format(file, out))
-#             else:
-#                 self._logger.info(" CC Building {}".format(file))
-#
-#             if p.returncode != 0:
-#                 self._logger.debug("compile: %s fail" % file)
-#             else:
-#                 self._logger.debug("compile: %s success" % file)
-#
-#         self._logger.info("Process pid:%d Complete." % pid)
-#         return
-#
-#
 def bigFileMD5Calc(file):
     """Update file MD5, by reading chunk by chunk."""
     m = hashlib.md5()
@@ -630,8 +516,13 @@ class CaptureBuilder(object):
             # scan project files
             make_analyzer = source_detective.MakeAnalyzer(self.__root_path,
                                                           self.__output_path, self.__prefers, self.__build_path)
-            sub_paths, files_s, files_h, compile_db = \
-                make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
+            try:
+                sub_paths, files_s, files_h, compile_db = \
+                    make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
+            except source_detective.AnalyzerError:
+                logger.info("Make analysis fail. Try default analyzer.")
+                self.__build_type = "other"
+                return self.scan_project()
 
             source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
                                                                                 files_s,
@@ -641,8 +532,14 @@ class CaptureBuilder(object):
         elif self.__build_type == "scons":
             scons_analyzer = source_detective.SConsAnalyzer(self.__root_path,
                                                             self.__output_path, self.__prefers, self.__build_path)
-            sub_paths, files_s, files_h, compile_db = \
-                scons_analyzer.get_project_infos_scons(build_args=self._extra_build_args)
+
+            try:
+                sub_paths, files_s, files_h, compile_db = \
+                    scons_analyzer.get_project_infos_scons(build_args=self._extra_build_args)
+            except source_detective.AnalyzerError:
+                logger.info("SCons analysis fail. Try default analyzer.")
+                self.__build_type = "other"
+                return self.scan_project()
 
             source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
                                                                                 files_s,

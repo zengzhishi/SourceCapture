@@ -43,7 +43,8 @@ def check_command_format(result, other_cc_compiles=None, other_cxx_compiles=None
             cxx_re_compile_str += "|(.*-?" + cxx_compile + ' )'
     cc_compile_regex = re.compile(cc_re_compile_str)
     cpp_compile_regex = re.compile(cxx_re_compile_str)
-    for line in result.split("\n"):
+    for line in result.split(b"\n"):
+        line = line.decode("utf8")
         if (cc_compile_regex.match(line) or cpp_compile_regex.match(line)) \
                 and has_file_s(line):
             return True
@@ -60,27 +61,29 @@ def check_sconstruct_exist(build_path):
 def create_command_infos(build_path, output, verbose_list, build_args=""):
     is_exist = check_sconstruct_exist(build_path)
     if not is_exist:
-        raise IOError("No SConstruct in " + build_path)
+        logger.warning("There is no SConstruct in %s" % build_path)
+        return None
 
     has_verbose = False
-    outlines = []
+    outlines = None
     for verbose in verbose_list:
         if verbose.find("=") != -1:
-            cmd = "cd {}; scons -n {} {}".format(build_path, build_args, verbose)
+            cmd = "scons -n {} {}".format(build_args, verbose)
         else:
-            cmd = "cd {}; scons -n {} {}=1".format(build_path, build_args, verbose)
+            cmd = "scons -n {} {}=1".format(build_args, verbose)
         logger.info("try to execute command: " + cmd)
-        p = subprocess.Popen(cmd, shell=True,
+        p = subprocess.Popen(cmd, shell=True, cwd=build_path,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         out, err = p.communicate()
         if check_command_format(out):
             has_verbose = True
-            outlines = out
+            # outlines = out
+            outlines = out.decode("utf-8")
             break
         logger.info("%s; excute fail." % cmd)
 
     if has_verbose:
-        output.writelines(outlines)
+        output.write(outlines)
     return output
 
 

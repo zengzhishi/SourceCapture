@@ -274,6 +274,14 @@ def using_scons(path):
     return False, None
 
 
+class AnalyzerError(Exception):
+    def __init__(self, message=None):
+        if message:
+            self.args = (message,)
+        else:
+            self.args = ("Analyzer Error happen!",)
+
+
 class Analyzer(object):
     def __init__(self, root_path, output_path, prefers, build_path=None):
         self._project_path = root_path
@@ -339,20 +347,23 @@ class SConsAnalyzer(Analyzer):
                 import tempfile
                 output = tempfile.TemporaryFile()
             except ImportError:
-                output_path_file = "/tmp/scons_infos.txt"
-                output = open(output_path_file, "w + b")
+                logger.warning("Can't create temporary file.")
+                raise AnalyzerError("Can't create temporary file.")
         else:
-            output = open(os.path.join(self._output_path, "scons_infos.txt"), "w + b")
+            output = open(os.path.join(self._output_path, "scons_infos.txt"), "w+")
 
         if build_args:
             output = parse_scons.create_command_infos(self._build_path, output,
                                                       VERBOSE_LIST, build_args=build_args)
         else:
             output = parse_scons.create_command_infos(self._build_path, output, VERBOSE_LIST)
+        if not output:
+            raise AnalyzerError("Without SConstruct in project.")
+        output.flush()
         output.seek(0)
         line_count, skip_count, compile_db = parse_scons.parse_flags(output, self._build_path)
         output.close()
-        logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" % \
+        logger.info("Parse scons building result: [line_count: %d] [skip_count: %d]" %
                     (line_count, skip_count))
         return paths, files_s, files_h, compile_db
 
@@ -365,8 +376,8 @@ class MakeAnalyzer(Analyzer):
                 import tempfile
                 output = tempfile.TemporaryFile()
             except ImportError:
-                output_path_file = "/tmp/make_infos.txt"
-                output = open(output_path_file, "w+")
+                logger.warning("Can't create temporary file.")
+                raise AnalyzerError("Can't create temporary file.")
         else:
             output = open(os.path.join(self._output_path, "make_infos.txt"), "w+")
 
@@ -375,12 +386,14 @@ class MakeAnalyzer(Analyzer):
         else:
             output = parse_make.create_command_infos(self._build_path, output)
 
+        if not output:
+            raise AnalyzerError("Not found Makefile in project.")
         output.flush()
         output.seek(0)
 
         line_count, skip_count, compile_db = parse_make.parse_flags(output, self._build_path)
         output.close()
-        logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" % \
+        logger.info("Parse make building result: [line_count: %d] [skip_count: %d]" %
                     (line_count, skip_count))
 
         return paths, files_s, files_h, compile_db

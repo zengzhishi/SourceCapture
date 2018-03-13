@@ -189,7 +189,8 @@ def create_command_infos(build_path, output, makefile_name=None,
     try:
         is_exist = check_makefile(build_path, makefile_name)
     except IOError:
-        raise
+        logger.warning("Project checking Makefile fail.")
+        return None
 
     if is_exist:
         cmd = "make -Bnkw {}".format(make_args)
