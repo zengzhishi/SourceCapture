@@ -250,14 +250,14 @@ def parse_cmakeInfo(depen_file):
         files_cxx, definitions_cxx, includes_cxx = [], [], []
         if source_field_cxx in config_dict:
             files_cxx = config_dict[source_field_cxx] if isinstance(config_dict[source_field_cxx], list) \
-                else (config_dict[source_field_cxx],)
+                else [config_dict[source_field_cxx],]
             # files_cxx = filter(lambda file: file[-2:] != ".o", files_cxx)
         if definition_field_cxx in config_dict:
             definitions_cxx = config_dict[definition_field_cxx] if isinstance(config_dict[definition_field_cxx], list) \
-                else (config_dict[definition_field_cxx],)
+                else [config_dict[definition_field_cxx],]
         if include_field_cxx in config_dict:
             includes_cxx = config_dict[include_field_cxx] if isinstance(config_dict[include_field_cxx], list) \
-                else (config_dict[include_field_cxx],)
+                else [config_dict[include_field_cxx],]
         cmake_infos.append([files_cxx, definitions_cxx, includes_cxx, "CXX"])
 
     if "C" in compiler_type:
@@ -267,14 +267,14 @@ def parse_cmakeInfo(depen_file):
         files_c, definitions_c, includes_c = [], [], []
         if source_field_c in config_dict:
             files_c = config_dict[source_field_c] if isinstance(config_dict[source_field_c], list) \
-                else (config_dict[source_field_c],)
+                else [config_dict[source_field_c],]
             # files_c = filter(lambda file: file[-2:] != ".o", files_c)
         if definition_field_c in config_dict:
             definitions_c = config_dict[definition_field_c] if isinstance(config_dict[definition_field_c], list) \
-                else (config_dict[definition_field_c],)
+                else [config_dict[definition_field_c],]
         if include_field_c in config_dict:
             includes_c = config_dict[include_field_c] if isinstance(config_dict[include_field_c], list) \
-                else (config_dict[include_field_c],)
+                else [config_dict[include_field_c],]
         cmake_infos.append([files_c, definitions_c, includes_c, "C"])
 
     return cmake_infos

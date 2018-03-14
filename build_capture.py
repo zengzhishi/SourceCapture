@@ -261,7 +261,11 @@ def file_args_MD5Calc(file, flags, definitions, includes, custom_arg):
 
     args = (flags, definitions, includes)
     for configs in args:
-        configs.sort()
+        try:
+            configs.sort()
+        except AttributeError:
+            copy_configs = [item for item in configs]
+            configs = copy_configs
         for line in configs:
             m.update(line.encode("utf8"))
     if custom_arg:
