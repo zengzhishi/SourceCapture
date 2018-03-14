@@ -509,8 +509,12 @@ class CaptureBuilder(object):
                 sub_paths, files_s, files_h, compile_db = \
                     make_analyzer.get_project_infos_make(build_args=self._extra_build_args)
             except source_detective.AnalyzerError:
-                logger.info("Make analysis fail. Try default analyzer.")
-                self.__build_type = "other"
+                if self.__build_path != self.root_path:
+                    logger.info("Outer project make analysis fail. Try inner project make analysis.")
+                    self.__build_path = self.__root_path
+                else:
+                    logger.info("Make analysis fail. Try default analyzer.")
+                    self.__build_type = "other"
                 return self.scan_project()
 
             source_infos, include_files, files_count = self._tranfer_compile_db(sub_paths,
