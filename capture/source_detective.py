@@ -429,7 +429,7 @@ class CMakeAnalyzer(Analyzer):
                         includes = map(lambda relative_path: _get_abs_path(relative_path), includes)
                         custom_flags = {}
                         custom_definitions = {}
-                        depend_s_files = filter(lambda file: file[-2:] != ".o", depend_files)
+                        depend_s_files = list(filter(lambda file: file[-2:] != ".o", depend_files))
                         for key in origin_custom_flags:
                             abs_file_path = final_build_path + os.path.sep + key
                             if abs_file_path in depend_files:

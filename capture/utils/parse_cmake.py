@@ -10,10 +10,15 @@
 """
 
 import re
-import os
+import logging
+import capture.utils.capture_util as capture_util
+
+
+logger = logging.getLogger("capture")
 
 
 def strip_quotation(string):
+    print("---------- strip: {} ---------- ".format(string))
     if (string[0] == "\"" and string[-1] == "\"") \
             or (string[0] == "\'" and string[-1] == "\'"):
         return string[1:-1]
@@ -35,20 +40,20 @@ def set_analysis(fin):
     temp_key = ""
     for line in fin:
         line = line.strip(' \t\n')
-        # 跳过注释和空行
+        # Skip comment and empty line
         if len(line) == 0 or line[0] == '#':
             continue
 
         # get line with comment, and remove comment part
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
-            line = re.split("\s+\#", line)[0]
+            line = re.split("\s+#", line)[0]
 
         if line == ")":
             continue
 
         # match one line config
-        oneline_result = re.match("set\((\S+)\s+(\S+)\)", line)
+        oneline_result = re.match("set\((\S+)\s+(\S+)\)$", line)
         if oneline_result:
             config[oneline_result.group(1)] = strip_quotation(oneline_result.group(2))
             continue
@@ -82,6 +87,87 @@ def set_analysis(fin):
             else:
                 config[temp_key] = []
     return config
+
+
+def strip_quotes(s):
+    if s[0] == "'" and s[-1] == "'":
+        return s[1:-1]
+    elif s[0] == '"' and s[-1] == '"':
+        return s[1:-1]
+    else:
+        return s
+
+
+def unbalanced_quotes(s):
+    single = 0
+    double = 0
+    excute = 0
+    for c in s:
+        if c == "'":
+            single += 1
+        elif c == '"':
+            double += 1
+        if c == "`":
+            excute += 1
+
+    move_double = s.count('\\"')
+    move_single = s.count("\\'")
+    single -= move_single
+    double -= move_double
+
+    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
+    return is_half_quote
+
+
+def set_fields_analysis(lines):
+    config = {}
+    for line in lines:
+        fields = re.split(r"\s+", line)
+        if len(fields) == 2:
+            config[fields[0]] = strip_quotes(fields[1])
+        elif len(fields) > 2:
+            config[fields[0]] = []
+            for field in fields[1:]:
+                if len(config[fields[0]]) > 0 and unbalanced_quotes(config[fields[0]][-1]):
+                    config[fields[0]][-1] += " " + field
+                else:
+                    config[fields[0]].append(field)
+            for i, field in enumerate(config[fields[0]]):
+                assign_regex = re.compile(r"(.+)\s*=\s*(.+)")
+                if assign_regex.match(field):
+                    if field.find(" ") != -1:
+                        field = '{}="{}"'.format(assign_regex.match(field).group(1), assign_regex.match(field).group(2))
+                    if field.find("<") != -1:
+                        field = field.replace("<", "\\<")
+                        field = field.replace(">", "\\>")
+                config[fields[0]][i] = strip_quotes(field)
+        else:
+            logger.warning("Analyze set fields: %s fail." % line)
+            continue
+    return config
+
+
+def oneline_set_analysis(fin):
+    set_regex = re.compile(r"set\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    comment_regex = re.compile(r"#.*?\n(.*)", flags=re.DOTALL)
+    lines = []
+    data = fin.read()
+    data = data.lstrip(" \t\n")
+    while len(data) != 0:
+        comment_match = comment_regex.match(data)
+        set_match = set_regex.match(data)
+        if comment_match:
+            data = comment_match.group(1)
+        elif set_match:
+            lines.append(set_match.group(1))
+            data = set_match.group(2)
+        else:
+            logger.warning("DependInfo analyze fail with an unknown line '%s' in %s." %
+                           (data.split("\n")[0], fin.name))
+            index = data.find("\n")
+            data = data[index:]
+        data = data.lstrip(" \t\n")
+    return set_fields_analysis(lines)
 
 
 def parse_flags(flags_file):
@@ -148,7 +234,7 @@ def parse_cmakeInfo(depen_file):
     :return: files_s, definitions, includes
     """
     fin = open(depen_file, 'r')
-    config_dict = set_analysis(fin)
+    config_dict = oneline_set_analysis(fin)
 
     if isinstance(config_dict["CMAKE_DEPENDS_LANGUAGES"], list):
         compiler_type = config_dict["CMAKE_DEPENDS_LANGUAGES"]
@@ -163,12 +249,15 @@ def parse_cmakeInfo(depen_file):
         include_field_cxx = "CMAKE_CXX_TARGET_INCLUDE_PATH"
         files_cxx, definitions_cxx, includes_cxx = [], [], []
         if source_field_cxx in config_dict:
-            files_cxx = config_dict[source_field_cxx]
+            files_cxx = config_dict[source_field_cxx] if isinstance(config_dict[source_field_cxx], list) \
+                else (config_dict[source_field_cxx],)
             # files_cxx = filter(lambda file: file[-2:] != ".o", files_cxx)
         if definition_field_cxx in config_dict:
-            definitions_cxx = config_dict[definition_field_cxx]
+            definitions_cxx = config_dict[definition_field_cxx] if isinstance(config_dict[definition_field_cxx], list) \
+                else (config_dict[definition_field_cxx],)
         if include_field_cxx in config_dict:
-            includes_cxx = config_dict[include_field_cxx]
+            includes_cxx = config_dict[include_field_cxx] if isinstance(config_dict[include_field_cxx], list) \
+                else (config_dict[include_field_cxx],)
         cmake_infos.append([files_cxx, definitions_cxx, includes_cxx, "CXX"])
 
     if "C" in compiler_type:
@@ -177,12 +266,15 @@ def parse_cmakeInfo(depen_file):
         include_field_c = "CMAKE_C_TARGET_INCLUDE_PATH"
         files_c, definitions_c, includes_c = [], [], []
         if source_field_c in config_dict:
-            files_c = config_dict[source_field_c]
+            files_c = config_dict[source_field_c] if isinstance(config_dict[source_field_c], list) \
+                else (config_dict[source_field_c],)
             # files_c = filter(lambda file: file[-2:] != ".o", files_c)
         if definition_field_c in config_dict:
-            definitions_c = config_dict[definition_field_c]
+            definitions_c = config_dict[definition_field_c] if isinstance(config_dict[definition_field_c], list) \
+                else (config_dict[definition_field_c],)
         if include_field_c in config_dict:
-            includes_c = config_dict[include_field_c]
+            includes_c = config_dict[include_field_c] if isinstance(config_dict[include_field_c], list) \
+                else (config_dict[include_field_c],)
         cmake_infos.append([files_c, definitions_c, includes_c, "C"])
 
     return cmake_infos

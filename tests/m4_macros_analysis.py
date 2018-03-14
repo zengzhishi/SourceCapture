@@ -228,7 +228,6 @@ def _check_undefined_self(slices, self_var):
     return False
 
 
-# 代表没有解析到目标的token，解析异常
 class ParserError(Exception):
     def __init__(self, message=None):
         if message:

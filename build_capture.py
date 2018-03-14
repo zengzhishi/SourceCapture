@@ -122,13 +122,6 @@ class CommandBuilder(building_process.ProcessBuilder):
                     flag_string += flag + " "
                 definition_string = ""
                 for definition in definitions:
-                    if definition.find(r'=\"') != -1:
-                        lst = re.split(r'\\"', definition)
-                        if len(lst) > 2:
-                            lst[1] = lst[1].replace(" ", "\ ")
-                            definition = lst[0] + r"\"" + lst[1] + r"\""
-                        else:
-                            logger.warning("definition %s analysis error" % definition)
                     definition_string += "-D" + definition + " "
                 include_string = ""
                 for include in includes:
@@ -143,13 +136,6 @@ class CommandBuilder(building_process.ProcessBuilder):
                             custom_args_string += flag + " "
                     if i in custom_definitions:
                         for definition in custom_definitions[i]:
-                            if definition.find(r'=\"') != -1:
-                                lst = re.split(r'\\"', definition)
-                                if len(lst) > 2:
-                                    lst[1] = lst[1].replace(" ", "\ ")
-                                    definition = lst[0] + r"\"" + lst[1] + r"\""
-                                else:
-                                    logger.warning("custom definition %s analysis error" % definition)
                             custom_args_string += "-D" + definition + " "
 
                     transfer_name = file_args_MD5Calc(src, global_flags, definitions, includes, custom_args_string)
@@ -173,9 +159,11 @@ class CommandBuilder(building_process.ProcessBuilder):
 
                     output_command = self.compile_command.get(compiler_type, "g++")\
                                      + output_command
+                    # replaced_command = capture_util.replace_escape(output_command)
+                    # json_dict["command"] = replaced_command
                     json_dict["command"] = output_command
                     result.append(json_dict)
-            except Exception:
+            except ValueError:
                 logger.warning("Building command of [{}] fail.".format(json.dumps(job_dict)))
 
         logger.info("Process pid:%d Complete." % pid)
@@ -203,7 +191,7 @@ def command_exec_worker(get_item_func):
             continue
 
         if out:
-            logger.info(" CC Building {}\n{}".format(file, out))
+            logger.info(" CC Building {}\n{}".format(file, out.decode("utf-8")))
         else:
             logger.info(" CC Building {}".format(file))
 

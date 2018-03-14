@@ -15,6 +15,37 @@ import logging
 logger = logging.getLogger("capture")
 
 
+def_escape = {' ': '\\ ',
+              '\\': '\\\\',
+              '(': '\\(',
+              ')': '\\)',
+              '<': '\\<',
+              '>': '\\>',
+              '\'': '\\\'',
+              '\"': '\\\"',
+              '{': '\\{',
+              '}': '\\}',
+              '[': '\\[',
+              ']': '\\]',
+              ',': '\\,',
+              ';': '\\;',
+              ':': '\\:',
+              '?': '\\?',
+              '`': '\\`',
+              '!': '\\!',
+              '@': '\\@',
+              '#': '\\#',
+              '$': '\\$',
+              '%': '\\%',
+              '^': '\\^',
+              '&': '\\&',
+              '*': '\\*',
+              '|': '\\|',
+              '-': '\\-',
+              '+': '\\+'
+              }
+
+
 def subproces_calling(cmd="", cwd=None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
     try:
         logger.debug("Excute command: %s" % cmd)
@@ -28,6 +59,23 @@ def subproces_calling(cmd="", cwd=None, stdout=subprocess.PIPE, stderr=subproces
     except (OSError, ValueError, subprocess.TimeoutExpired):
         logger.warning("Subprocess command:[%s] execute fail" % cmd)
         return -1, None, None
+
+
+def replace_escape(string):
+    output_string = string
+    for key, value in def_escape.items():
+        output_string = output_string.replace(key, value)
+
+    return output_string
+
+
+# Analysis Error happen
+class ParserError(Exception):
+    def __init__(self, message=None):
+        if message:
+            self.args = (message,)
+        else:
+            self.args = ("Parser Error happen!",)
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
