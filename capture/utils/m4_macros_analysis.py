@@ -6,25 +6,23 @@
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-03-06 10:12:11
     @LastModif: 2018-03-06 20:12:02
-    @Note:
+    @Note:  Autotools function analysis module.
+    This script can be use to analyze *.m4 and configure.ac files, and gains the export variables and conditions.
 """
 from __future__ import absolute_import
 
 import sys
-import ply.lex as lex
 import re
 import types
 import logging
+import ply.lex as lex
 
-sys.path.append("../capture/conf")
-import parse_logger
+if __name__ == "__main__":
+    sys.path.append("../conf")
+    import parse_logger
+    parse_logger.addFileHandler("./capture.log", "capture")
+
 logger = logging.getLogger("capture")
-parse_logger.addFileHandler("./capture.log", "capture")
-
-
-# TODO: 对于其他的语法不做关注，只关注变量的变化，和某些语句，如AC_SUBST， AC_CONDITIONAL等导出环境的语句
-# 我们甚至不关心变量在判断和case中怎么变化了，干脆这找到-D的情况，只获取含有-D的变化情况
-# 对于扫描到MACROS 和 VAR的行，我们需要重新解析，否则，可能会出现错误
 
 reserved = {
     "if": "if",
@@ -38,6 +36,17 @@ reserved = {
     "esac": "esac",
 }
 
+# C MACROS line will let some right RSPAREN and RPAREN token be recognized as comment line.
+# So we need to recognize them out, and skip them.
+c_include_lquote = r'["<]'
+c_include_rquote = r'[">]'
+c_include_name = r'[a-zA-Z_][a-zA-Z0-9_/.]*'
+c_macros = r'\#[\t ]*include\s+' + c_include_lquote + c_include_name + c_include_rquote + \
+            r'|' + r'\#[\t ]*ifdef[^\n]*' + \
+            r'|' + r'\#[\t ]*else' + \
+            r'|' + r'\#[\t ]*if[^\n]*' + \
+            r'|' + r'\#[\t ]*endif'
+
 
 class M4Lexer(object):
     # List of token names.
@@ -49,7 +58,7 @@ class M4Lexer(object):
         'COLON',
         'DOUBLE_SEMICOLON',         # for case seperating
         'SEMICOLON',
-        'MINUS',
+        'C_MACROS',
         'COMMENT',
 
         'LPAREN',
@@ -75,10 +84,14 @@ class M4Lexer(object):
         'ASSIGN',
         'APPEND',
         'CASE_OR',
+        'MINUS',
+        'PLUS',
         'AND',
         'OR',
         'NOT',
         'CARET',
+        'HOME',
+        'PERCENT',
 
         'BACKQUOTE',
         'AT',
@@ -118,8 +131,11 @@ class M4Lexer(object):
     t_EQUAL = r'\=\='
     t_APPEND = r'\+\='
     t_ASSIGN = r'\='
+    t_PLUS = r'\+'
     t_NOT = r'!'
     t_CARET = r'\^'
+    t_HOME = r'\~'
+    t_PERCENT = r'\%'
 
     t_BACKQUOTE = r'`'
     t_AT = r'@'
@@ -136,6 +152,10 @@ class M4Lexer(object):
         # print("macros line: {}".format(t.value))
         return t
 
+    @lex.TOKEN(c_macros)
+    def t_C_MACROS(self, t):
+        return t
+
     def t_COMMENT(self, t):
         r'\#.*|dnl.*'
         pass    # ignore comment line
@@ -150,53 +170,77 @@ class M4Lexer(object):
         return t
 
     def t_error(self, t):
-        print("Illegal character '%s'" % t.value[0])
+        print("Illegal character '%s', pos:(%d, %d)" % (t.value[0], t.lineno, t.lexpos))
         t.lexer.skip(1)
 
     # Build the lexer
     def build(self, **kwargs):
         self.lexer = lex.lex(module=self, **kwargs)
 
+    def clone(self):
+        return self.lexer.clone()
+
+    def __del__(self):
+        del self.lexer
+        del lex
+
     # Test it output
-    def get_token_iter(self, data):
-        self.lexer.input(data)
+    def get_token_iter(self, data, lexer=None):
+        if lexer is None:
+            lexer = self.lexer
+
+        lexer.input(data)
         while True:
-            tok = self.lexer.token()
-            if not tok: break
+            tok = lexer.token()
+            if not tok:
+                break
             yield tok
 
 
-functions = {}
-
-# export_vars = {}
-#
-# export_conditions = {}
-
-# string: Means that we don't care about content, just concentrate on ']'
-# default: Using default method to analyze token flow.
-# call_function: Means that we will calling other function here.
-# ID_VAR & ID_VAR: Means the field content one ID. ID_VAR will export variable, ID_ENV will export condition.
-
-# The bool value represent whether this field is essential.
 # TODO: 拓展表格，加入可能会出现的 IFELSE 宏定义函数，这种情况的话应该作为option来处理, 条件解析不出来就直接构建一个随机不重复的条件
+# Analysis_type:
+#     string: Means that we don't care about content, just concentrate on ']'
+#     default: Using default method to analyze token flow.
+#     call_function: Means that we will calling other function here.
+#     ID_VAR & ID_VAR: Means the field content one ID. ID_VAR will export variable, ID_ENV will export condition.
+#     func_name: Using to define a new m4 function
+#     test: Using to define a test condition for a conditional variable export.
+#     value: The default value for some variables define or export.
+# The bool value represent whether this field is essential.
 m4_macros_map = {
+    "AC_DEFUN": ["func_name", True, "default", True],
     "AC_REQUIRE": ["call_function", True],
     "AC_MSG_CHECKING": ["string", True],
     "AC_MSG_RESULT": ["string", True],
     "AC_MSG_ERROR": ["string", True],
-    "AC_SUBST": ["ID_VAR", True, "string", False],
+    "AC_SUBST": ["ID_VAR", True, "value", False],
     "AM_CONDITIONAL": ["ID_ENV", True, "test", False],
     "AC_MSG_WARN": ["string", True],
+    "AC_HELP_STRING": ["string", True, "string", True],
+    "AC_MSG_NOTICE": ["string", True],
 }
 
 left = ['LPAREN', 'LSPAREN', 'LBRACES',]
 right = ['RPAREN', 'RSPAREN', 'RBRACES',]
-
-
 filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
+
+# Temp data saving util
+options = []
+reverses = []
+functions = {}
+
+
+class ParserError(Exception):
+    """Error happen in analyze configure.ac or *.m4 file"""
+    def __init__(self, message=None):
+        if message:
+            self.args = (message,)
+        else:
+            self.args = ("Parser Error happen!",)
 
 
 def check_next(generator, string):
+    """Checking generator of the next value whether is same to string."""
     try:
         token = generator.next()
     except StopIteration:
@@ -207,6 +251,10 @@ def check_next(generator, string):
 
 
 def try_next(generator, string):
+    """
+        Expect to gain string at generator next, if true, pass;
+        or will seek back to last token place and return False
+    """
     if not generator.has_next():
         return False
     token = generator.next()
@@ -217,6 +265,7 @@ def try_next(generator, string):
 
 
 def _check_undefined(slices):
+    """Checking whether slices has undefined variables."""
     for slice in slices:
         if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice):
             return True
@@ -224,6 +273,7 @@ def _check_undefined(slices):
 
 
 def _check_undefined_self(slices, self_var):
+    """Checking undefined slices whether contain itself variables."""
     for slice in slices:
         search = re.search(r"\$\(?([a-zA-Z_][a-zA-Z0-9_]*)\)?", slice)
         if search:
@@ -233,19 +283,8 @@ def _check_undefined_self(slices, self_var):
     return False
 
 
-class ParserError(Exception):
-    def __init__(self, message=None):
-        if message:
-            self.args = (message,)
-        else:
-            self.args = ("Parser Error happen!",)
-
-
-options = []
-reverses = []
-
-
 def _args_check_bool_expresion(generator, ends=["RPAREN", "RSPAREN"]):
+    """Checking bool string like 'test ...' in args field of m4function."""
     option_list = []
     try:
         token = generator.next()
@@ -288,27 +327,39 @@ def _args_check_bool_expresion(generator, ends=["RPAREN", "RSPAREN"]):
 
 
 def _check_bool_expresion(generator, ends=["then",]):
-    # TODO: 结束条件可以是两种： ; | then, 最终generator停止应该在 then
-    # 返回选择条件, 粗暴处理
+    """
+        Checking bool string for 'if test ...' in if..else...
+        TODO: There are still some problems for bool condition value return.
+    """
 
     option_list = []
     try:
         token = generator.next()
-        if token.type != "test" and token.type != "LSPAREN":
+        if token.type == "test":
+            pass
+        elif token.type == "LSPAREN":
+            ends = ["RSPAREN",]
+        else:
             logger.warning("This is a nonstandard expression")
         option_list.append(token.value)
 
         quote_index = -1
-        while token.type not in ends:
+        quote_counts = 0
+        while token.type not in ends and quote_counts >= 0:
+            print(token)
             if token.type == "SEMICOLON":
                 pass
             elif token.type == "DOUBLE_QUOTE":
                 if quote_index < 0:
                     quote_index = len(option_list)
-                else:
+                elif quote_index < len(option_list):
                     option_list[quote_index] = '"' + option_list[quote_index]
                     option_list[-1] += '"'
                     quote_index = -1
+                elif quote_index == len(option_list):
+                    option_list.append('""')
+                else:
+                    raise ParserError
             elif token.type == "MINUS":
                 if generator.index > 0:
                     last_token = generator.get_history(generator.index - 2)[0]
@@ -318,9 +369,16 @@ def _check_bool_expresion(generator, ends=["then",]):
                         option_list.append("-" + next_token.value)
                     else:
                         option_list[-1] += "-" + next_token.value
+            elif token.type in left:
+                quote_counts += 1
+            elif token.type in right:
+                quote_counts -= 1
             else:
                 option_list.append(token.value)
             token = generator.next()
+        if quote_counts < 0:
+            generator.seek(generator.index - 1)
+            return None
     except StopIteration:
         raise ParserError
 
@@ -328,7 +386,13 @@ def _check_bool_expresion(generator, ends=["then",]):
 
 
 def _check_sh_if(generator, level, func_name=None):
+    """Checking 'if... else... ' and update options, and reverses status."""
+    index = generator.index
     option = _check_bool_expresion(generator)
+    if option is None:
+        logger.debug("This if may be string line.")
+        generator.seek(index)
+        return False
     options.append(option)
     reverses.append(False)
     end_flags = False
@@ -349,10 +413,11 @@ def _check_sh_if(generator, level, func_name=None):
             reverses[-1] = False
         else:
             raise ParserError
-    return
+    return True
 
 
 def _check_sh_case(generator, level, func_name=None):
+    """Checking 'case ...' and update options, and reverses status."""
     try:
         token = generator.next()
         token_list = []
@@ -393,7 +458,10 @@ def _check_sh_case(generator, level, func_name=None):
 
 
 def _cache_check_assign(generator):
-    """Assignment or appendage line analysis."""
+    """
+        Assignment or appendage line analysis.
+        TODO: Whether we need to save them and using to judge if...test...?
+    """
     index = generator.index
     value = ""
     try:
@@ -413,6 +481,7 @@ def _cache_check_assign(generator):
 
 
 def _check_global_dict_empty(dict):
+    """Checking whether the dict is empty and return default_N field to use."""
     default_n_regex = re.compile(r"default_\d+")
     default_N = 1
     for option_key in dict["option"].keys():
@@ -424,6 +493,7 @@ def _check_global_dict_empty(dict):
 
 
 def _get_present_level_dict(start_dict, is_assign=False):
+    """Get present option status dict in functions."""
     present_dict = start_dict
     has_default, default_N = _check_global_dict_empty(present_dict)
 
@@ -446,6 +516,7 @@ def _get_present_level_dict(start_dict, is_assign=False):
 
 
 def _check_next_empty_field(generator, empty_flags=["RSPAREN", "RPAREN", "COMMA"]):
+    """Check next field whether is empty[in empty flags]"""
     token = generator.next()
     generator.seek(generator.index - 1)
     if token.type in empty_flags:
@@ -453,14 +524,156 @@ def _check_next_empty_field(generator, empty_flags=["RSPAREN", "RPAREN", "COMMA"
     return False
 
 
-def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["RSPAREN",], ):
-    logger.info("# calling analysis with type: " + analysis_type +
+def macros_line_analyze(line, variables, generator):
+    """Analyzing macros line, and saving such variables to functions dict."""
+    macros_assignment_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\"?([^\"]*)\"?")
+    macros_appendage_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\+=\s*\"?([^\"]*)\"?")
+    with_var_line_regex = re.compile(r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)")
+
+    assign_match = macros_assignment_line_regex.match(line)
+    append_match = macros_appendage_line_regex.match(line)
+    if assign_match or append_match:
+        var = assign_match.group(1) if assign_match else append_match.group(1)
+        value = assign_match.group(2) if assign_match else append_match.group(2)
+        if var not in variables:
+            variables[var] = {
+                "defined": [],
+                "undefined": [],
+                "option": {},
+                "is_replace": True if assign_match else False
+            }
+
+        present_option_dict = _get_present_level_dict(variables[var], True if assign_match else False)
+        present_option_dict["is_replace"] = True if assign_match else False
+        present_option_dict["defined"] = present_option_dict["defined"] if append_match else []
+        present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
+
+        words = split_line(value)
+        temp = ""
+        for (i, word) in enumerate(words):
+            temp = temp + " " + word if temp else word
+            if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+                continue
+
+            with_var_line_match = with_var_line_regex.match(temp)
+            slices = []
+            while with_var_line_match:
+                temp = with_var_line_match.group(1)
+                undefine_var = with_var_line_match.group(2)
+                other = with_var_line_match.group(3)
+                if undefine_var in variables:
+                    value = variables[undefine_var]
+                    if len(value["undefined"]) == 0 and len(value["option"]) == 0:
+                        undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
+                        temp = temp + undefine_var + other
+                    elif len(value["option"]) == 0:
+                        slices.append(other)
+                        slices.append(value["defined"])
+                        slices.append(value["undefined"])
+                    else:
+                        slices.append(other)
+                        slices.append("$({})".format(undefine_var))
+                else:
+                    slices.append(other)
+                    slices.append("$({})".format(undefine_var))
+                with_var_line_match = with_var_line_regex.match(temp)
+
+            slices.append(temp)
+            slices.reverse()
+            transfer_word = "".join(slices)
+            if _check_undefined(slices):
+                if _check_undefined(slices):
+                    present_option_dict["is_replace"] = False
+                    if len(slices) == 1:
+                        temp = ""
+                        continue
+                present_option_dict["undefined"].append(transfer_word)
+            else:
+                present_option_dict["defined"].append(transfer_word)
+
+            temp = ""
+    return
+
+
+def _check_ac_defunc(generator):
+    """Checking AC_DEFUN field"""
+    check_next(generator, "LPAREN")
+    check_next(generator, "LSPAREN")
+    token = generator.next()
+    if token.type != "ID":
+        raise ParserError
+    func_name = token.value
+    functions[func_name] = {
+        "calling": [],
+        "need_condition_var": [],
+        "need_assign_var": [],
+        "variables": {},
+        "export_variables": {},
+        "export_conditions": {}
+    }
+    check_next(generator, "RSPAREN")
+    check_next(generator, "COMMA")
+    analyze(generator, analysis_type="default", func_name=func_name, level=1)
+    check_next(generator, "RPAREN")
+    return
+
+
+def _check_calling_args(generator, func_name, level):
+    """Checking undefined function calling args."""
+    analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
+    generator.seek(generator.index - 1)
+    last_token = generator.next()
+    next_token = generator.next()
+    logger.debug("print two: %s %s" % (last_token, next_token))
+    # Some informal function format may be like:
+    # FUNCTION([], []
+    #           [], [])
+    is_newline_seperate = (last_token.type == "RSPAREN" and
+                           next_token.type != "RPAREN" and
+                           next_token.type != "COMMA" and
+                           last_token.lineno != next_token.lineno)
+    while next_token.type == "COMMA" or is_newline_seperate:
+        if not _check_next_empty_field(generator):
+            analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
+        generator.seek(generator.index - 1)
+        last_token = generator.next()
+        next_token = generator.next()
+        logger.debug("print two: %s %s" % (last_token, next_token))
+        is_newline_seperate = (last_token.type == "RSPAREN" and
+                               next_token.type != "RPAREN" and
+                               next_token.type != "COMMA" and
+                               last_token.lineno != next_token.lineno)
+    logger.debug("End of function args analysis.")
+    return next_token
+
+
+def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["RSPAREN",], allow_defunc=False):
+    """
+    The main recursion function for configure.ac and *.m4 file analysis.
+    :param generator:                   A CacheGenerator instance for iteratively getting token.
+                                        When generator has no next token, will raise a StopIteration Exception.
+    :param analysis_type:               Analysis_type will define which more we choose to checking fields.
+    :param func_name:                   The present func_name, this will help to saving variables and conditions.
+    :param level:                       The present recursion level.
+    :param ends:                        The end flags for this calling recursion.
+    :param allow_defunc:                Whether allow to recognize AC_DEFUN.
+                                        This may be used in configure.ac top level checking, which is allow to define
+                                        m4 function here.
+                                        But when our recursion walk into other function field or if...else... or case,
+                                        this arg will be set to False
+    :return:
+    """
+    if func_name is None:
+        logger.warning("Functions can't be None type.")
+        return
+
+    logger.debug("# calling analysis with type: " + analysis_type +
                 " In function: " + func_name + "\tlevel:" + str(level))
     quote_count = 0
     roll_back_times = 0
     try:
         start_tokens = [generator.next() for _ in range(2)]
-        print(start_tokens)
+        logger.info(start_tokens)
     except StopIteration:
         raise ParserError
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
@@ -474,16 +687,12 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 quote_count += 1
             elif token.type in right:
                 quote_count -= 1
-        print("?????%s"%token)
         if token and token.type == "RSPAREN":
             return
         else:
             raise ParserError
     elif start_tokens[0].type != "LSPAREN" and len(ends) == 1 and ends[0] == "RSPAREN":
-        # TODO: 这里其实还可能是不规范的写法，没有使用 [] 来括起一个参数域，这种情况属于不规范的方式，
-        # 但是autotools可以解析，需要保持兼容
-
-        # 这种时候结束符可能是逗号或者是右括号
+        # For such informal case, the end flags need to change to COMMA or RPAREN
         roll_back_times += 1
         ends = ["COMMA", "RPAREN"]
         logger.warning("Set ends: %s" % ends)
@@ -498,10 +707,20 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
 
     if analysis_type == "default":
         # Count of quotes, if quote_count == 0, it means the process main back to last recursion
-        while quote_count > 0 or token not in ends:
+        # if quote_count <= 1 and token in ends:
+        #     logger.debug("Maybe empty analysis fields.")
+
+        while quote_count > 0 or token.type not in ends:
             # 1. Analyze some defined function from m4_macros_map
             if token.type == "ID" and token.value in m4_macros_map:
-                logger.info("## Start defined function analysis\tname: " + token.value)
+                logger.debug("## Start defined function analysis\tname: " + token.value)
+                if token.value == "AC_DEFUN":
+                    if allow_defunc:
+                        logger.debug("## Start defining a functions.")
+                        _check_ac_defunc(generator)
+                    else:
+                        raise ParserError
+
                 check_next(generator, "LPAREN")
                 for i in range(len(m4_macros_map[token.value]) // 2):
                     name = m4_macros_map[token.value][i * 2]
@@ -518,37 +737,36 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                                 if not _check_next_empty_field(generator):
                                     analyze(generator, analysis_type=name, func_name=func_name, level=level + 1)
                             else:
+                                if name == "value" and len(functions[func_name]["need_assign_var"]) != 0:
+                                    # Need to remove waiting default value variable.
+                                    functions[func_name]["need_assign_var"].pop()
                                 generator.seek(generator.index - 1)
-                            logger.info("defined next_token: %s" % next_token)
+                            logger.debug("defined next_token: %s" % next_token)
 
                         except StopIteration:
                             raise ParserError
 
                 check_next(generator, "RPAREN")
                 token = generator.next()
-                print(token)
-
-                # if token.type == "RSPAREN":
-                #     break
 
             elif token.type == "ID" and re.match("^A[CM]_", token.value):
                 # 2. Analyze some undefined functions started with AC | AM.
                 #   Using "default" mode.
-                logger.info("## Start undefined function analysis\tname: " + token.value)
+                logger.debug("## Start undefined function analysis\tname: " + token.value)
 
                 try:
                     next_token = generator.next()
+                    functions[func_name]["calling"].append(token.value)
+                    logger.critical(next_token)
                     if next_token.type != "LPAREN":
                         # Maybe the MACROS function without args.
+                        logger.debug(quote_count)
                         token = next_token
                         if token.type in ends and quote_count <= 1:
                             break
-                    analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
-                    next_token = generator.next()
-                    while next_token.type == "COMMA":
-                        if not _check_next_empty_field(generator):
-                            analyze(generator, analysis_type="default", func_name=func_name, level=level + 1)
-                        next_token = generator.next()
+                        else:
+                            continue
+                    next_token = _check_calling_args(generator, func_name, level)
                 except StopIteration:
                     raise ParserError
 
@@ -558,16 +776,15 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
 
             elif token.type == "ID":
                 # 3. Analyze some assignment line, and skip some line we don't care.
-                logger.info("## Start unknown line analysis %s" % token)
+                logger.debug("## Start unknown line analysis %s" % token)
                 var = token.value
                 try:
                     next_token = generator.next()
-                    logger.critical("%s" % quote_count)
                     if next_token.type == "ASSIGN" or next_token.type == "APPEND":
                         is_assign = True if next_token.type == "ASSIGN" else False
                         value = _cache_check_assign(generator)
                         if value is not None:
-                            # TODO: 修改变量
+                            # TODO: The assignment line actually should be saved.
                             # if var not in functions[func_name]["variables"]:
                             #     functions[func_name]["variables"][var] = {
                             #         "defined": [],
@@ -579,21 +796,22 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                             pass
                         token = generator.next()
                     elif next_token.type == "LPAREN":
-                        # self-defined MACROS function
-                        try:
-                            sub_quotes_count = 1
-                            while sub_quotes_count != 0:
-                                next_token = generator.next()
-                                if next_token.type in left:
-                                    sub_quotes_count += 1
-                                elif next_token.type in right:
-                                    sub_quotes_count -= 1
+                        logger.debug("## Start checking user defined function. name: %s" % var)
+                        functions[func_name]["calling"].append(token.value)
+                        logger.critical(next_token)
+                        if next_token.type != "LPAREN":
+                            # Maybe the MACROS function without args.
+                            logger.debug(quote_count)
                             token = next_token
-                            if token.type != "RPAREN":
-                                raise ParserError
-                            token = generator.next()
-                        except StopIteration:
+                            if token.type in ends and quote_count <= 1:
+                                break
+                            else:
+                                continue
+                        next_token = _check_calling_args(generator, func_name, level)
+                        if next_token.type != "RPAREN":
                             raise ParserError
+                        token = generator.next()
+
                     else:
                         # sub_quote_count = 0
                         lineno = token.lineno
@@ -603,7 +821,9 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                             break
                         # When start a new line, we should end up this loop.
                         one_word_line = True
-                        while (token.type not in ends or quote_count != 0) and \
+                        sub_quotes_count = 0
+                        logger.debug("quote count: %d" % sub_quotes_count)
+                        while (token.type not in ends or sub_quotes_count > 0) and \
                                 token.lineno == lineno:
                             one_word_line = False
                             if next_token.type in left:
@@ -612,112 +832,48 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                                 quote_count -= 1
                             token = next_token
                             next_token = generator.next()
-                        logger.warning(token)
+                        logger.debug("quote count: %d" % sub_quotes_count)
+                        logger.debug("Move outer token:%s" % token)
                         if not one_word_line:
-                            generator.seek(generator.index - 1)
+                            generator.seek(generator.index - 2)
+                            token = generator.next()
                 except StopIteration:
                     raise ParserError
 
-                # if token.type == "RSPAREN":
-                #     break
-
             elif token.type == "MACROS":
                 # 4. Analyze Macros assignment line.
-                logger.info("## Start Macros line analysis %s" % token)
+                logger.debug("## Start Macros line analysis %s" % token)
                 line = token.value
-
-                macros_assignment_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\"?([^\"]*)\"?")
-                macros_appendage_line_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\+=\s*\"?([^\"]*)\"?")
-                with_var_line_regex = re.compile(r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)")
-
-                assign_match = macros_assignment_line_regex.match(line)
-                append_match = macros_appendage_line_regex.match(line)
                 variables = functions[func_name]["variables"]
-                if assign_match or append_match:
-                    var = assign_match.group(1) if assign_match else append_match.group(1)
-                    value = assign_match.group(2) if assign_match else append_match.group(2)
-                    if var not in variables:
-                        variables[var] = {
-                            "defined": [],
-                            "undefined": [],
-                            "option": {},
-                            "is_replace": True if assign_match else False
-                        }
-
-                    present_option_dict = _get_present_level_dict(variables[var], True if assign_match else False)
-                    present_option_dict["is_replace"] = True if assign_match else False
-                    present_option_dict["defined"] = present_option_dict["defined"] if append_match else []
-                    present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
-
-                    words = split_line(value)
-                    temp = ""
-                    for (i, word) in enumerate(words):
-                        temp = temp + " " + word if temp else word
-                        if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
-                            continue
-
-                        with_var_line_match = with_var_line_regex.match(temp)
-                        slices = []
-                        while with_var_line_match:
-                            temp = with_var_line_match.group(1)
-                            undefine_var = with_var_line_match.group(2)
-                            other = with_var_line_match.group(3)
-                            if undefine_var in variables:
-                                value = variables[undefine_var]
-                                if len(value["undefined"]) == 0 and len(value["option"]) == 0:
-                                    undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
-                                    temp = temp + undefine_var + other
-                                elif len(value["option"]) == 0:
-                                    slices.append(other)
-                                    slices.append(value["defined"])
-                                    slices.append(value["undefined"])
-                                else:
-                                    slices.append(other)
-                                    slices.append("$({})".format(undefine_var))
-                            else:
-                                slices.append(other)
-                                slices.append("$({})".format(undefine_var))
-                            with_var_line_match = with_var_line_regex.match(temp)
-
-                        slices.append(temp)
-                        slices.reverse()
-                        transfer_word = "".join(slices)
-                        if _check_undefined(slices):
-                            if _check_undefined(slices):
-                                present_option_dict["is_replace"] = False
-                                if len(slices) == 1:
-                                    temp = ""
-                                    continue
-                            present_option_dict["undefined"].append(transfer_word)
-                        else:
-                            present_option_dict["defined"].append(transfer_word)
-
-                        temp = ""
-
+                macros_line_analyze(line, variables, generator)
                 token = generator.next()
-                # if token.type == "RSPAREN":
-                #     break
 
             elif token.type == "if":
-                _check_sh_if(generator, level, func_name=func_name)
-                token = generator.next()
-                # if token.type == "RSPAREN":
-                #     break
+                logger.debug("## Start if analysis.")
+                status = _check_sh_if(generator, level, func_name=func_name)
+                if status:
+                    token = generator.next()
+                else:
+                    token.type = "ID"
+                    logger.debug("## End of if analysis fail. Try string analysis.")
+                    continue
+                logger.debug("## End of if analysis pass.")
 
             elif token.type == "case":
+                logger.debug("## Start case analysis.")
                 _check_sh_case(generator, level, func_name=func_name)
                 token = generator.next()
-                # if token.type == "RSPAREN":
-                #     break
-                if token.type in ends:
-                    break
+                logger.debug("## End of case analysis.")
 
             elif token.type in left:
                 quote_count += 1
                 token = generator.next()
             elif token.type in right:
                 quote_count -= 1
+                if quote_count == 0 and token.type in ends:
+                    break
                 token = generator.next()
+
             else:
                 # 4. Start with some undefined token, we maybe skip it.
                 token = generator.next()
@@ -725,8 +881,32 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
             if token.type in ends and quote_count <= 1:
                 break
 
+    elif analysis_type == "value":
+        logger.debug("## Start value analysis.")
+        value = []
+        quote_count = 0
+        while token.type not in ["RSPAREN", "RPAREN", "COMMA"] or quote_count != 0:
+            value.append(token.value)
+            if token.type in left:
+                quote_count += 1
+            elif token.type in right:
+                quote_count -= 1
+
+            try:
+                token = generator.next()
+            except StopIteration:
+                raise ParserError
+
+        # TODO: Need to check option
+        need_assign_vars = functions[func_name]["need_assign_var"]
+        export_vars = functions[func_name]["export_variables"]
+        if len(need_assign_vars) != 0:
+            var = need_assign_vars.pop()
+            var_dict = export_vars[var]
+            var_dict["defined"] = " ".join(value)
+
     elif analysis_type == "string":
-        logger.info("## Start string analysis")
+        logger.debug("## Start string analysis.")
         value = []
         quote_count = 0
         while token.type not in ["RSPAREN", "RPAREN"] or quote_count != 0:
@@ -741,15 +921,8 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
             except StopIteration:
                 raise ParserError
 
-        # TODO: 需要检查option
-        need_assign_vars = functions[func_name]["need_assign_var"]
-        export_vars = functions[func_name]["export_variables"]
-        if len(need_assign_vars) != 0:
-            var_dict = export_vars[need_assign_vars[-1]]
-            var_dict["defined"] = " ".join(value)
-
     elif analysis_type == "test":
-        logger.info("## Start test analysis")
+        logger.debug("## Start test analysis")
         generator.seek(generator.index - 1)
         bool_str = _args_check_bool_expresion(generator)
         export_conditions = functions[func_name]["export_conditions"]
@@ -769,14 +942,13 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
         token = generator.next()
 
     elif analysis_type == "ID_ENV":
-        logger.info("## Start ID_ENV analysis")
+        logger.debug("## Start ID_ENV analysis")
         export_conditions = functions[func_name]["export_conditions"]
         export_conditions[token.value] = None
         functions[func_name]["need_condition_var"].append(token.value)
         token = generator.next()
 
     elif analysis_type == "ID_VAR":
-        # TODO:需要后面重建
         export_vars = functions[func_name]["export_variables"]
         export_vars[token.value] = {
             "defined": [],
@@ -787,53 +959,44 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
         functions[func_name]["need_assign_var"].append(token.value)
         token = generator.next()
 
-    # if token.type == "RSPAREN":
     if token.type in ends:
         [generator.seek(generator.index - 1) for _ in range(roll_back_times)]
-        logger.info("### END CALLING: %s" % token)
+        logger.debug("### END CALLING: %s" % token)
         return
     else:
         raise ParserError
 
 
-def functions_analyze(generator):
+def functions_analyze(generator, filename):
     # This function will analyze token flow and concentrates on AC_DEFUN
+    logger.info("checking m4 file: %s" % filename)
     try:
+        if "other" not in functions:
+            functions["other"] = {
+                "variables": {}
+            }
         while generator.has_next():
             token = generator.next()
             if token.type == "ID" and token.value == "AC_DEFUN":
                 try:
-                    check_next(generator, "LPAREN")
-                    check_next(generator, "LSPAREN")
-                    token = generator.next()
-                    if token.type != "ID":
-                        raise ParserError
-                    func_name = token.value
-                    functions[func_name] = {
-                        "calling": [],
-                        "need_condition_var": [],
-                        "need_assign_var": [],
-                        "variables": {},
-                        "export_variables": {},
-                        "export_conditions": {}
-                    }
-                    check_next(generator, "RSPAREN")
-                    check_next(generator, "COMMA")
-                    analyze(generator, analysis_type="default", func_name=func_name, level=1)
-                    check_next(generator, "RPAREN")
+                    _check_ac_defunc(generator)
                 except ParserError:
-                    logger.warning("Analyze AC FUNCTION: {} fail. Skip the left part.".format(token.value))
+                    logger.warning("Analyze AC FUNCTION fail. Skip the left part.")
                     while token.value != "AC_DEFUN":
                         token = generator.next()
                     generator.seek(generator.index - 1)
-            elif token.type == "ID":
+            else:
                 while token.value != "AC_DEFUN":
                     token = generator.next()
+                    if token.type == "MACROS":
+                        variables = functions["other"]["variables"]
+                        line = token.value
+                        macros_line_analyze(line, variables, generator)
                 generator.seek(generator.index - 1)
-            else:
-                raise ParserError
     except StopIteration:
         logger.warning("File AC_DEFUN analyze complete.")
+
+    return functions
 
 
 def split_line(line):
@@ -861,7 +1024,6 @@ def unbalanced_quotes(s):
         if c == "`":
             excute += 1
 
-    # 去除转义后的引号带来的影响
     move_double = s.count('\\"')
     move_single = s.count("\\'")
     single -= move_single
@@ -875,15 +1037,16 @@ class CacheGenerator(object):
     """
         If we use has_next() to check next token exist, we will not meet StopIteration exception.
         Anyway, this class is used to store history token, and provide function seek back old tokens.
-        TODO: We can add more features like getting same feature cluster.
+        Note: We can add more features like getting same feature cluster.
     """
-    _max_index = 0
-    _index = 0
-    _caches = []
-    _has_next = True
 
     def __init__(self, generator):
-        if type(generator) != types.GeneratorType:
+        self._max_index = 0
+        self._index = 0
+        self._caches = []
+        self._has_next = True
+
+        if not isinstance(generator, types.GeneratorType):
             raise TypeError
         self._generator = generator
 
@@ -915,7 +1078,7 @@ class CacheGenerator(object):
         data = self._caches[self._index - 1]
         self._index += 1
         self._set_max()
-        logger.info(data)
+        logger.debug(data)
         return data
 
     def last(self):
@@ -944,17 +1107,20 @@ class CacheGenerator(object):
 
 
 if __name__ == "__main__":
-    filename = sys.argv[1]
-    with open(filename) as fin:
-        raw_data = fin.read()
     mylexer = M4Lexer()
     mylexer.build()
-    generator = mylexer.get_token_iter(raw_data)
-    cache_generator = CacheGenerator(generator)
-    functions_analyze(cache_generator)
-    import json
+    for i, filename in enumerate(sys.argv[1:]):
 
-    with open("./data_func.out", "w") as fout:
-        json.dump(functions, fout, indent=4)
+        with open(filename) as fin:
+            raw_data = fin.read()
+        # logger.debug(raw_data)
+        generator = mylexer.get_token_iter(raw_data)
+
+        cache_generator = CacheGenerator(generator)
+        functions_analyze(cache_generator, filename)
+        import json
+
+        with open("./data_func%d.out"%i, "w") as fout:
+            json.dump(functions, fout, indent=4)
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

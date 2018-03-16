@@ -9,14 +9,22 @@
     @Note: TODO: Analyze autotools config files.
 """
 
-import subprocess
+import imp
 import os
 import sys
 import re
 
+if __name__ == "__main__":
+    import m4_macros_analysis
+    import capture_util
+else:
+    import capture.utils.m4_macros_analysis as m4_macros_analysis
+    import capture.utils.capture_util as capture_util
+
 import logging
 sys.path.append(os.path.join("..", "conf"))
 import parse_logger
+parse_logger.addFileHandler("./capture.log", "capture")
 logger = logging.getLogger("capture")
 
 
@@ -32,15 +40,15 @@ comment_regex = re.compile(r"^#|^dnl")
 message_regex = re.compile(r"^AC_MSG_NOTICE")
 function_regex = re.compile(r"^([a-zA-Z_]+[a-zA-Z0-9_]*)$")
 
-M4_MACROS_ARGS_COUNT = {
-    # function_name, args_count
-    "AC_DEFUN": ["default", "default"],
-    "AC_MSG_CHECKING": ["str"],
-    "AC_MSG_RESULT": ["str"],
-    "AC_MSG_ERROR": ["str"],
-    "AC_COMPILE_IFELSE": ["shell", "shell", "shell"],
-    "AC_REQUIRE": ["name"]
-}
+# M4_MACROS_ARGS_COUNT = {
+#     # function_name, args_count
+#     "AC_DEFUN": ["default", "default"],
+#     "AC_MSG_CHECKING": ["str"],
+#     "AC_MSG_RESULT": ["str"],
+#     "AC_MSG_ERROR": ["str"],
+#     "AC_COMPILE_IFELSE": ["shell", "shell", "shell"],
+#     "AC_REQUIRE": ["name"]
+# }
 
 AC_REGEX_RULES = (
     # 0. Comment line, or useless line
@@ -56,10 +64,6 @@ AC_REGEX_RULES = (
     [0, message_regex],
 )
 
-function_regex = re.compile(r"AC_DEFUN\(\)")
-M4_REGEX_RULES = (
-    [],
-)
 
 assignment_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*=\s*(.*)")
 appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*(.*)")
@@ -96,7 +100,6 @@ def dump_data(json_dict, output_path):
 
 class AutoToolsParser(object):
     _fhandle_configure_ac = None
-    # _fhandle_makefile_am = {}
     configure_ac_info = {}
     m4_macros_info = {}
     makefile_am_info = {}
@@ -141,7 +144,19 @@ class AutoToolsParser(object):
         if output_path:
             dump_data(self.makefile_am_info, output_path)
         else:
-            dump_data(self.makefile_am_info, os.path.join(self._project_path, "make_file_result.json"))
+            dump_data(self.makefile_am_info, os.path.join(self._output_path, "am_info.json"))
+
+    def dump_m4_info(self, output_path=None):
+        if output_path:
+            dump_data(self.m4_macros_info, output_path)
+        else:
+            dump_data(self.m4_macros_info, os.path.join(self._output_path, "m4_info.json"))
+
+    def dump_ac_info(self, output_path=None):
+        if output_path:
+            dump_data(self.configure_ac_info, output_path)
+        else:
+            dump_data(self.configure_ac_info, os.path.join(self._output_path, "configure_ac_info.json"))
 
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
         tmp_line = ""
@@ -287,89 +302,64 @@ class AutoToolsParser(object):
             present_dict = present_dict["option"][option][not reverse_stat]
         return present_dict
 
-    def _ac_match_check(self, line):
-        for pair in AC_REGEX_RULES:
-            match = pair[0].match(line)
-            if match:
-                self.configure_ac_info[pair[1]] = match.group(1)
-                return True
-        return False
-
     def set_configure_ac(self):
-        config_file_name = self._check_configure_scan()
-        if config_file_name:
-            self._fhandle_configure_ac = open(config_file_name, "r")
-        else:
-            self._logger.warning("Not found configure.ac or configure.in file")
-            return
-        self.configure_ac_info = {
-            "variables": {},
-            # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
-            # analysis.
-            "export_variables": {},
-            "conditionals": {
-                # key: name of conditional witch will be use for Makefile.am conditionally compiling
-                # value: {
-                #   "option": {
-                #       True:   ...
-                #       False:  ...
-                #    }
-                # }
-            }
+        if self._fhandle_configure_ac is None:
+            config_file_name = self._check_configure_scan()
+            if config_file_name:
+                self._fhandle_configure_ac = open(config_file_name, "r")
+            else:
+                logger.warning("Not found configure.ac or configure.in file")
+                return
+
+        func_name = "configure_ac"
+        m4_macros_analysis.functions[func_name] = {
+           "calling": [],
+           "need_condition_var": [],
+           "need_assign_var": [],
+           "variables": {},
+           # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
+           "export_variables": {},
+           "export_conditions": {}
         }
-        ac_variables = self.configure_ac_info["variables"]
 
         try:
-            self._load_configure_ac_info(ac_variables)
+            raw_data = self._fhandle_configure_ac.read()
         except IOError:
-            self._logger.warning("Couldn't read configure.ac file")
-
-    def _load_configure_ac_info(self, ac_variables):
-        if not self._fhandle_configure_ac:
-            raise IOError("loading configure.ac or configure.in fail.")
-        option_regexs = (
-            re.compile(r"\s*if\s+test\s+")
-        )
-
-        for line in self._fhandle_configure_ac:
-            line = line.strip(" \n\t")
-            if self._ac_match_check(line):
-                continue
-
-            assign_match = assignment_regex.match(line)
-            append_match = appendage_regex.match(line)
-            if assign_match or append_match:
-                key = assign_match.group(1) if assign_match else append_match.group(1)
-                value = assign_match.group(2) if assign_match else append_match.group(2)
-                if key not in ac_variables:
-                    ac_variables[key] = {
-                        "defined": [],
-                        "undefined": [],
-                        "is_replace": False,
-                        "option": {}
-                    }
+            logger.warning("Couldn't read configure.ac file")
+            return
+        mylexer = m4_macros_analysis.M4Lexer()
+        mylexer.build()
+        generator = mylexer.get_token_iter(raw_data)
+        cache_generator = m4_macros_analysis.CacheGenerator(generator)
+        # self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator)
+        try:
+            # initialize functions
+            m4_macros_analysis.analyze(cache_generator, func_name=func_name,
+                                       analysis_type="default", level=1, allow_defunc=True)
+        except StopIteration:
+            self.configure_ac_info = m4_macros_analysis.functions
+            logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
 
     def _check_configure_scan(self):
         for file_name in CONFIGURE_AC_NAMES:
-            file_path = self._project_path + os.path.sep + file_name
+            file_path = os.path.join(self._project_path, file_name)
             if os.path.exists(file_path):
                 return file_path
         return None
 
     def _preload_m4_config(self, configure_ac_filepath):
         cmd = "fgrep \"{}\" {}".format("AC_CONFIG_MACRO_DIR", configure_ac_filepath)
-        p = subprocess.Popen(cmd, shell=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        out, err = p.communicate()
-        if p.returncode == 0:
+        (returncode, out, err) = capture_util.subproces_calling(cmd)
+
+        if returncode == 0:
             macros_dir_match = macros_dir_regex.match(out)
             if not macros_dir_match:
-                self._logger.warning("Not match AC_CONFIG_MACRO_DIR in {}!".format(configure_ac_filepath))
+                logger.warning("Not match AC_CONFIG_MACRO_DIR in {}!".format(configure_ac_filepath))
                 m4_folders = None
             else:
                 m4_folders = macros_dir_match.group(1)
         else:
-            self._logger.warning("cmd: {}, exec fail!".format(cmd))
+            logger.warning("cmd: {}, exec fail!".format(cmd))
             m4_folders = None
         return m4_folders
 
@@ -380,93 +370,38 @@ class AutoToolsParser(object):
                 self._fhandle_configure_ac = open(config_file_name, "r")
                 self.configure_ac_info["macros_dir"] = self._preload_m4_config(config_file_name)
             else:
-                self._logger.warning("Not found configure.ac or configure.in file")
+                logger.warning("Not found configure.ac or configure.in file")
                 return None
 
         return self.configure_ac_info["macros_dir"]
 
+    def _m4_file_analysis(self, fin):
+        """Loading m4 file, and building an info map."""
+        # imp.reload(m4_macros_analysis)
+        raw_data = fin.read()
+        mylexer = m4_macros_analysis.M4Lexer()
+        mylexer.build()
+        lexer = mylexer.clone()
+        generator = mylexer.get_token_iter(raw_data, lexer=lexer)
+        cache_generator = m4_macros_analysis.CacheGenerator(generator)
+        self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator, fin.name)
+        del mylexer
+        return
+
     def load_m4_macros(self):
-        """Loading m4 files from m4 directory, and building up macros info table"""
+        """Loading m4 files from m4 directory, and building up macros info table."""
         m4_folder_name = self._get_m4_folder()
         if not m4_folder_name:
-            self._logger.warning("Not found m4 folder.")
+            logger.warning("Not found m4 folder.")
             return
 
-        m4_project = self._project_path + os.path.sep + m4_folder_name
+        m4_project = os.path.join(self._project_path, m4_folder_name)
         for file_name in os.listdir(m4_project):
             if not file_name.endswith(".m4"):
                 continue
-            file_path = m4_project + os.path.sep + file_name
+            file_path = os.path.join(m4_project, file_name)
             with open(file_path) as m4_fin:
                 self._m4_file_analysis(m4_fin)
-
-    def _m4_file_analysis(self, fin):
-        """ *.m4 文件的分析，针对里面定义的宏定义，构建一份信息表"""
-        """Loading m4 file, and building an info map."""
-        import capture.utils.m4_macros_analysis as m4_macros_analysis
-        lexer = m4_macros_analysis.M4Lexer()
-        lexer.build()
-        data = self._m4_block_reader(fin)
-        self.m4_macros_info = {
-            "function": {
-                # key: function name
-                # value: {
-                #   key: variable name
-                #   value: {defined:, undefined:, option:,}
-                # }
-            }
-        }
-        func_info = self.m4_macros_info["function"]
-        func_pos = []
-        quote_stacks = []
-        quotes = (
-            'LPAREN',
-            'LSPAREN',
-            'LBRACES',
-            'RPAREN',
-            'RSPAREN',
-            'RBRACES',
-        )
-        squotes = (
-            'LSPAREN',
-            'RSPAREN',
-        )
-        len_quotes = len(quotes)
-
-        analyze_type = "default"
-        while len(data) != 0:
-            for token in lexer.get_token_iter(data):
-                if token.type == "AC_DEFUN":
-                    func_info[token.value] = {}
-                    func_pos.append((token.value, M4_MACROS_ARGS_COUNT[token.value]))
-
-                if token.type in M4_MACROS_ARGS_COUNT:
-                    func_pos.append((token.value, M4_MACROS_ARGS_COUNT[token.value]))
-
-                # checking quote
-                if token.type in quotes[:len_quotes / 2]:
-                    quote_stacks.append(token.type)
-                elif token.type in quote_stacks[len_quotes / 2:]:
-                    quote = quote_stacks.pop()
-                    if quotes[quotes.index(quote) + len_quotes / 2] != token.type:
-                        self._logger.warning("Not match correct quote! Maybe be {} has some problem".format(fin.name))
-                        return
-                    if func_pos[-1][0] != "UNKNOWN" and token.type == "RSPAREN":
-                        func_pos[-1][1] -= 1
-                        analyze_type = M4_MACROS_ARGS_COUNT[func_pos[-1][0]][func_pos[-1][1]]
-
-
-    def _m4_block_reader(self, fin, size=1024):
-        data = ""
-        while size > 0:
-            try:
-                line = fin.next()
-                size -= 1
-            except StopIteration:
-                self._logger.info("Reading file: {} complete".format(fin.name))
-                break
-            data += line
-        return data
 
 
 def unbalanced_quotes(s):
@@ -495,7 +430,7 @@ if __name__ == "__main__":
         project_path = sys.argv[1]
         am_path = sys.argv[2]
     else:
-        sys.stderr.write("Fail!\n")
+        sys.stderr.write("Fail! Please input path and am path.\n")
         exit(-1)
 
     make_file_am = [
@@ -504,5 +439,12 @@ if __name__ == "__main__":
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.dump_makefile_am_info()
+
+    auto_tools_parser.load_m4_macros()
+    auto_tools_parser.dump_m4_info()
+
+    auto_tools_parser.set_configure_ac()
+    auto_tools_parser.dump_ac_info()
+
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
