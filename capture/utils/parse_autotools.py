@@ -330,7 +330,7 @@ class AutoToolsParser(object):
         mylexer = m4_macros_analysis.M4Lexer()
         mylexer.build()
         generator = mylexer.get_token_iter(raw_data)
-        cache_generator = m4_macros_analysis.CacheGenerator(generator)
+        cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
         # self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator)
         try:
             # initialize functions
@@ -383,7 +383,7 @@ class AutoToolsParser(object):
         mylexer.build()
         lexer = mylexer.clone()
         generator = mylexer.get_token_iter(raw_data, lexer=lexer)
-        cache_generator = m4_macros_analysis.CacheGenerator(generator)
+        cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
         self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator, fin.name)
         del mylexer
         return
@@ -437,11 +437,11 @@ if __name__ == "__main__":
         am_path,
     ]
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
-    auto_tools_parser.set_makefile_am(make_file_am)
-    auto_tools_parser.dump_makefile_am_info()
+    # auto_tools_parser.set_makefile_am(make_file_am)
+    # auto_tools_parser.dump_makefile_am_info()
 
-    auto_tools_parser.load_m4_macros()
-    auto_tools_parser.dump_m4_info()
+    # auto_tools_parser.load_m4_macros()
+    # auto_tools_parser.dump_m4_info()
 
     auto_tools_parser.set_configure_ac()
     auto_tools_parser.dump_ac_info()

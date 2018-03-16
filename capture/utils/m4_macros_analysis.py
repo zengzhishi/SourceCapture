@@ -45,7 +45,8 @@ c_macros = r'\#[\t ]*include\s+' + c_include_lquote + c_include_name + c_include
             r'|' + r'\#[\t ]*ifdef[^\n]*' + \
             r'|' + r'\#[\t ]*else' + \
             r'|' + r'\#[\t ]*if[^\n]*' + \
-            r'|' + r'\#[\t ]*endif'
+            r'|' + r'\#[\t ]*endif' + \
+            r'|' + r'\#[\t ]*define[\t ]+[a-zA-Z_][a-zA-Z0-9_]*[\t ]+[^\s]*'
 
 
 class M4Lexer(object):
@@ -103,7 +104,7 @@ class M4Lexer(object):
         'ID',
     ] + list(reserved.values())
 
-    t_VAR = r'\$[a-zA-Z_][a-zA-Z0-9_]*|\$[a-zA-Z_][a-zA-Z0-9_]*'
+    t_VAR = r'\$[a-zA-Z_][a-zA-Z0-9_]*|\$\([a-zA-Z_][a-zA-Z0-9_]*\)'
     t_QUE_MARK = r'\?'
     t_COLON = r':'
     t_DOUBLE_SEMICOLON = r';;'
@@ -158,7 +159,8 @@ class M4Lexer(object):
 
     def t_COMMENT(self, t):
         r'\#.*|dnl.*'
-        pass    # ignore comment line
+        # pass    # ignore comment line
+        return t
 
     def t_newline(self, t):
         r'\n+'
@@ -190,10 +192,29 @@ class M4Lexer(object):
             lexer = self.lexer
 
         lexer.input(data)
+        last_token = lex.LexToken()
+        last_token.type = ""
+        last_token.value = ""
+        last_token.lineno = -1
+        last_token.lexpos = -1
         while True:
             tok = lexer.token()
             if not tok:
                 break
+            if tok.type == "COMMENT" and last_token.lineno != tok.lineno:
+                # Pass comment line
+                continue
+            elif last_token.lineno == tok.lineno and \
+                    last_token.lexpos + len(last_token.value) == tok.lexpos:
+                # Only the #... are next to other part should be return
+                #TODO: 需要重新分割这部分的 token 使得其能够作为
+                pass
+            elif tok.type != "COMMENT":
+                pass
+            else:
+                continue
+
+            last_token = tok
             yield tok
 
 
@@ -457,26 +478,81 @@ def _check_sh_case(generator, level, func_name=None):
         raise ParserError
 
 
-def _cache_check_assign(generator):
+def _cache_check_assign(generator, var, lineno, type="="):
     """
         Assignment or appendage line analysis.
         TODO: Whether we need to save them and using to judge if...test...?
     """
-    index = generator.index
+    assignment_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*=\s*([^\s\)\]]*)")
+    appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*([^\s\)\]]*)")
+    line = generator.get_line(lineno)
+    index = line.find(var)
+    var_line = line[index:]
     value = ""
     try:
         next_token = generator.next()
-        if next_token.type == "DOUBLE_QUOTE":
+        quote_types = ["DOUBLE_QUOTE", "BACKQUOTE"]
+        if next_token.type in quote_types:
+            quote = next_token.value
+            quote_type = next_token.type
+            logger.debug("Expect quote: %s" % quote_type)
             last_token = next_token
+            current_lineno = next_token.lineno
             next_token = generator.next()
-            while next_token.type != "DOUBLE_QUOTE" or last_token == '\\':
-                value += " " + next_token.value
+            quotes_count = 0 if next_token.lineno != current_lineno else 1
+            lines = [line,]
+            while next_token.type != quote_type or last_token.type == "BACKSLASH":
+                last_token = next_token
                 next_token = generator.next()
+
+                if next_token.lineno != current_lineno:
+                    current_lineno = next_token.lineno
+                    lines.append(generator.get_line(current_lineno))
+                    quotes_count = 0
+
+                if next_token.type == quote_type:
+                    quotes_count += 1
+            end_lineno = next_token.lineno
+            end_line = generator.get_line(end_lineno)
+            logger.debug("end line: %s" % end_line)
+            logger.debug("end quote_count: %d" % quotes_count)
+            end_index = 0
+            while quotes_count > 0 and end_index != -1:
+                end_index = end_line.find(quote, end_index)
+                end_index += 1
+                quotes_count -= 1
+            logger.debug(lines)
+            logger.debug("end_index: %d" % end_index)
+            if end_index != -1:
+                lines[-1] = lines[-1][:end_index]
+
+            logger.debug("new lines: %s" % lines)
+            # Remove comment part
+            for i, line in enumerate(lines):
+                comment_regex = re.compile(r'(.*)\s+(\#|dnl).*')
+                comment_match = comment_regex.match(line)
+                if comment_match:
+                    lines[i] = comment_match.group(1)
+
+            total_line = " ".join(lines)
+            logger.debug("total line: %s" % total_line)
+            # +1 is for double_quote or backquote
+            start_index = index + len(var) + len(type) + 1
+            logger.debug("start index: %d" % start_index)
+            value = total_line[start_index:-1]
+            logger.debug(value)
+
+        elif lineno != next_token.lineno:
+            generator.seek(generator.index - 1)
+            value = ""
         else:
-            generator.seek(index)
-            return None
+            assign_match = assignment_regex.match(var_line)
+            append_match = appendage_regex.match(var_line)
+            if assign_match or append_match:
+                value = assign_match.group(2) if assign_match else append_match.group(2)
+
         return value
-    except StopIteration:
+    except (StopIteration, ValueError, IndexError):
         raise ParserError
 
 
@@ -778,12 +854,14 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                 # 3. Analyze some assignment line, and skip some line we don't care.
                 logger.debug("## Start unknown line analysis %s" % token)
                 var = token.value
+                lineno = token.lineno
                 try:
                     next_token = generator.next()
                     if next_token.type == "ASSIGN" or next_token.type == "APPEND":
                         is_assign = True if next_token.type == "ASSIGN" else False
-                        value = _cache_check_assign(generator)
+                        value = _cache_check_assign(generator, var, lineno, next_token.value)
                         if value is not None:
+                            logger.info("ASSIGN value: %s=%s" % (var, value))
                             # TODO: The assignment line actually should be saved.
                             # if var not in functions[func_name]["variables"]:
                             #     functions[func_name]["variables"][var] = {
@@ -1040,7 +1118,7 @@ class CacheGenerator(object):
         Note: We can add more features like getting same feature cluster.
     """
 
-    def __init__(self, generator):
+    def __init__(self, generator, origin_data=None):
         self._max_index = 0
         self._index = 0
         self._caches = []
@@ -1057,6 +1135,10 @@ class CacheGenerator(object):
             self._set_max()
         except StopIteration:
             self._has_next = False
+
+        if origin_data:
+            self._origin_data = origin_data
+            self._origin_lines = origin_data.split("\n")
 
     def _set_max(self):
         if self._index > self._max_index:
@@ -1105,6 +1187,21 @@ class CacheGenerator(object):
         else:
             return False
 
+    def get_line(self, lineno, end=None):
+        if self._origin_lines is None:
+            raise ValueError("No origin data.")
+
+        if end is None or not isinstance(end, int):
+            if 0 <= lineno < len(self._origin_lines):
+                return self._origin_lines[lineno - 1]
+            else:
+                raise IndexError
+        elif lineno >= end:
+            raise ValueError("lineno < end is required.")
+        else:
+            if 0 <= lineno < len(self._origin_lines) and 0 < end < len(self._origin_lines):
+                return self._origin_lines[lineno, end]
+
 
 if __name__ == "__main__":
     mylexer = M4Lexer()
@@ -1116,7 +1213,7 @@ if __name__ == "__main__":
         # logger.debug(raw_data)
         generator = mylexer.get_token_iter(raw_data)
 
-        cache_generator = CacheGenerator(generator)
+        cache_generator = CacheGenerator(generator, origin_data=raw_data)
         functions_analyze(cache_generator, filename)
         import json
 
