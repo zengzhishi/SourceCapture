@@ -182,10 +182,6 @@ class M4Lexer(object):
     def clone(self):
         return self.lexer.clone()
 
-    def __del__(self):
-        del self.lexer
-        del lex
-
     # Test it output
     def get_token_iter(self, data, lexer=None):
         if lexer is None:
