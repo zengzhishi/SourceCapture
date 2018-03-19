@@ -71,6 +71,16 @@ appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*(.*)")
 # remove [ -o ] witch maybe not present in Makefile.am flags
 filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
 
+preset_output_variables = [
+    "CXXFLAGS",
+    "CFLAGS",
+    "CPPFLAGS",
+    "OBJCFLAGS",
+    "OBJCXXFLAGS",
+    "LIBS",
+    "LDFLAGS"
+]
+
 
 def _check_undefined(slices):
     for slice in slices:
@@ -100,15 +110,15 @@ def dump_data(json_dict, output_path):
 
 class AutoToolsParser(object):
     _fhandle_configure_ac = None
-    configure_ac_info = {}
-    m4_macros_info = {}
-    makefile_am_info = {}
 
     def __init__(self, project_path, output_path, build_path=None):
         self._project_path = project_path
         self._output_path = output_path
 
         self._build_path = build_path if build_path else self._project_path
+        self.configure_ac_info = {}
+        self.m4_macros_info = {}
+        self.makefile_am_info = {}
 
     def __del__(self):
         if self._fhandle_configure_ac:
@@ -276,7 +286,7 @@ class AutoToolsParser(object):
     def _check_global_dict_empty(self, dict):
         default_n_regex = re.compile(r"default_\d+")
         default_N = 1
-        for option_key in dict["option"].iterkeys():
+        for option_key in dict["option"].keys():
             if default_n_regex.match(option_key):
                 default_N += 1
         if len(dict["defined"]) != 0 or len(dict["undefined"]) != 0 or len(dict["option"]) != 0:
@@ -321,7 +331,6 @@ class AutoToolsParser(object):
            "export_variables": {},
            "export_conditions": {}
         }
-
         try:
             raw_data = self._fhandle_configure_ac.read()
         except IOError:
@@ -335,7 +344,8 @@ class AutoToolsParser(object):
         try:
             # initialize functions
             m4_macros_analysis.analyze(cache_generator, func_name=func_name,
-                                       analysis_type="default", level=1, allow_defunc=True)
+                                       analysis_type="default", level=1, allow_defunc=True,
+                                       allow_calling=True)
         except StopIteration:
             self.configure_ac_info = m4_macros_analysis.functions
             logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
@@ -352,7 +362,7 @@ class AutoToolsParser(object):
         (returncode, out, err) = capture_util.subproces_calling(cmd)
 
         if returncode == 0:
-            macros_dir_match = macros_dir_regex.match(out)
+            macros_dir_match = macros_dir_regex.match(out.decode("utf8"))
             if not macros_dir_match:
                 logger.warning("Not match AC_CONFIG_MACRO_DIR in {}!".format(configure_ac_filepath))
                 m4_folders = None
@@ -385,7 +395,6 @@ class AutoToolsParser(object):
         generator = mylexer.get_token_iter(raw_data, lexer=lexer)
         cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
         self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator, fin.name)
-        del mylexer
         return
 
     def load_m4_macros(self):
@@ -402,6 +411,18 @@ class AutoToolsParser(object):
             file_path = os.path.join(m4_project, file_name)
             with open(file_path) as m4_fin:
                 self._m4_file_analysis(m4_fin)
+
+        # Setup m4 lib for configure.ac to use
+        m4_macros_analysis.m4_libs = self.m4_macros_info
+        logger.info("m4 files loading complete.")
+
+    def build_ac_export_infos(self):
+        """利用variables构建export_variables"""
+        if not self.configure_ac_info:
+            return
+
+
+
 
 
 def unbalanced_quotes(s):
@@ -437,11 +458,11 @@ if __name__ == "__main__":
         am_path,
     ]
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
-    # auto_tools_parser.set_makefile_am(make_file_am)
-    # auto_tools_parser.dump_makefile_am_info()
+    auto_tools_parser.set_makefile_am(make_file_am)
+    auto_tools_parser.dump_makefile_am_info()
 
-    # auto_tools_parser.load_m4_macros()
-    # auto_tools_parser.dump_m4_info()
+    auto_tools_parser.load_m4_macros()
+    auto_tools_parser.dump_m4_info()
 
     auto_tools_parser.set_configure_ac()
     auto_tools_parser.dump_ac_info()
