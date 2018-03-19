@@ -719,7 +719,8 @@ def _check_calling_args(generator, func_name, level):
     return next_token
 
 
-def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["RSPAREN",], allow_defunc=False):
+def analyze(generator, analysis_type="default", func_name=None, level=0,
+            ends=["RSPAREN",], allow_defunc=False):
     """
     The main recursion function for configure.ac and *.m4 file analysis.
     :param generator:                   A CacheGenerator instance for iteratively getting token.
@@ -857,18 +858,13 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         is_assign = True if next_token.type == "ASSIGN" else False
                         value = _cache_check_assign(generator, var, lineno, next_token.value)
                         if value is not None:
-                            logger.info("ASSIGN value: %s=%s" % (var, value))
                             # TODO: The assignment line actually should be saved.
-                            # if var not in functions[func_name]["variables"]:
-                            #     functions[func_name]["variables"][var] = {
-                            #         "defined": [],
-                            #         "undefined": [],
-                            #         "option": [],
-                            #         "is_replace": True,
-                            #     }
-                            # start_dict = functions[func_name]["variables"][var]
-                            pass
+                            logger.info("ASSIGN value: %s=%s" % (var, value))
+                            line = var + "=" + value
+                            variables = functions[func_name]["variables"]
+                            macros_line_analyze(line, variables, generator)
                         token = generator.next()
+
                     elif next_token.type == "LPAREN":
                         logger.debug("## Start checking user defined function. name: %s" % var)
                         functions[func_name]["calling"].append(token.value)
@@ -887,7 +883,6 @@ def analyze(generator, analysis_type="default", func_name=None, level=0, ends=["
                         token = generator.next()
 
                     else:
-                        # sub_quote_count = 0
                         lineno = token.lineno
                         if token.type == "ID" and next_token.type in ends:
                             # Directly break
