@@ -84,7 +84,8 @@ preset_output_variables = [
 
 def _check_undefined(slices):
     for slice in slices:
-        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice):
+        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice) or \
+                re.search(r"\@[a-zA-Z_][a-zA-Z0-9_]\@", slice):
             return True
     return False
 
@@ -132,24 +133,6 @@ class AutoToolsParser(object):
     def project_path(self):
         return self._project_path
 
-    def set_makefile_am(self, project_scan_result):
-        """
-        :param project_scan_result:                     project scan result from source_detective
-        :return:
-        """
-        for file_path in project_scan_result:
-            fhandle_am = open(file_path, "r")
-            self.makefile_am_info[file_path] = {
-                "variables": {},
-                "destinations": {}
-            }
-            am_pair_var = self.makefile_am_info[file_path]["variables"]
-            am_pair_dest = self.makefile_am_info[file_path]["destinations"]
-
-            self._reading_makefile_am(am_pair_var, fhandle_am)
-            fhandle_am.close()
-        return
-
     def dump_makefile_am_info(self, output_path=None):
         if output_path:
             dump_data(self.makefile_am_info, output_path)
@@ -167,6 +150,24 @@ class AutoToolsParser(object):
             dump_data(self.configure_ac_info, output_path)
         else:
             dump_data(self.configure_ac_info, os.path.join(self._output_path, "configure_ac_info.json"))
+
+    def set_makefile_am(self, project_scan_result):
+        """
+        :param project_scan_result:                     project scan result from source_detective
+        :return:
+        """
+        for file_path in project_scan_result:
+            fhandle_am = open(file_path, "r")
+            self.makefile_am_info[file_path] = {
+                "variables": {},
+                "destinations": {}
+            }
+            am_pair_var = self.makefile_am_info[file_path]["variables"]
+            am_pair_dest = self.makefile_am_info[file_path]["destinations"]
+
+            self._reading_makefile_am(am_pair_var, fhandle_am)
+            fhandle_am.close()
+        return
 
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
         tmp_line = ""
@@ -223,7 +224,9 @@ class AutoToolsParser(object):
                     }
 
                 words = split_line(value)
-                with_var_line_regex = re.compile(r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)")
+                dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
+                at_var_pattern = r"(.*)\@([a-zA-Z_][a-zA-Z0-9_]*)\@(.*)"
+                with_var_line_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
 
                 present_option_dict = self._get_option_level_dict(am_pair_var[key], options, is_in_reverse,
                                                                   True if assig_match else False)
@@ -242,9 +245,13 @@ class AutoToolsParser(object):
                     # slices will be a reversed list
                     slices = []
                     while with_var_line_match:
-                        temp = with_var_line_match.group(1)
-                        undefine_var = with_var_line_match.group(2)
-                        other = with_var_line_match.group(3)
+                        match_chose = 0
+                        if with_var_line_match.group(1):
+                            match_chose += 2
+
+                        temp = with_var_line_match.group(1 + match_chose)
+                        undefine_var = with_var_line_match.group(2 + match_chose)
+                        other = with_var_line_match.group(3 + match_chose)
                         if undefine_var in am_pair_var:
                             value = am_pair_var[undefine_var]
                             if len(value["undefined"]) == 0 and value["option"] is None:
@@ -320,6 +327,9 @@ class AutoToolsParser(object):
             else:
                 logger.warning("Not found configure.ac or configure.in file")
                 return
+
+        import imp
+        imp.reload(m4_macros_analysis)
 
         func_name = "configure_ac"
         m4_macros_analysis.functions[func_name] = {
@@ -420,6 +430,59 @@ class AutoToolsParser(object):
         """利用variables构建export_variables"""
         if not self.configure_ac_info:
             return
+        export_variables = self.configure_ac_info["configure_ac"]["export_variables"]
+        variables = self.configure_ac_info["configure_ac"]["variables"]
+        for export_var in export_variables:
+            src = variables.get(export_var, dict())
+            dest = export_variables.get(export_var, dict())
+            if len(src) == 0:
+                continue
+
+            if len(dest.get("defined", [])) != 0 or len(dest.get("undefined"), []) != 0:
+                continue
+
+            export_variables[export_var] = src
+
+        for preset_export_var in preset_output_variables:
+            if preset_export_var in export_variables:
+                continue
+
+            src = variables.get(preset_export_var, dict())
+            if len(src) == 0:
+                continue
+
+            export_variables[preset_export_var] = src
+
+    def build_autotools_target(self):
+        """利用 ac infos 和 am infos来构建最终目标的flags"""
+        # Step 1. Check out whether is a root_path makefile.am
+        root_path_makefile = os.path.join(self._project_path, "Makefile.am")
+        if root_path_makefile in self.makefile_am_info:
+            makefile_am = self.makefile_am_info.get(root_path_makefile, dict())
+            # step 1.1. check subdir
+            subdirs = makefile_am["variables"].get("SUBDIRS", list())
+            sub_makefile_ams = map(lambda subpath: os.path.join(self._project_path, subpath), subdirs)
+        else:
+            sub_makefile_ams = self.makefile_am_info.keys()
+
+        for makefile_am in sub_makefile_ams:
+            am_infos = self.makefile_am_info.get(makefile_am, dict())
+
+            # Step 1.2. Get targets we need.
+            program_regex = re.compile(r"\W+_PROGRAMS")
+            lib_regex = re.compile(r"\W+_LIBRARIES")
+            libtool_regex = re.compile(r"\W+_LTLIBRARIES")
+
+            am_infos[key]["target"] = {}
+            target = am_infos[key]["target"]
+            for (key, value) in am_infos.items():
+                if program_regex.match(key):
+                    if key
+
+
+
+
+
 
 
 
