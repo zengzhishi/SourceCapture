@@ -287,22 +287,40 @@ def try_next(generator, string):
     return False
 
 
-def _check_undefined(slices):
+def check_one_undefined_slice(slice, with_ac_var=False):
+    undefined_pattern = r"\$[a-zA-Z_][a-zA-Z0-9_]*|\$\([a-zA-Z_][a-zA-Z0-9_]*\)"
+    undefined_at_pattern = r"\@[a-zA-Z_][a-zA-Z0-9_]*\@"
+    if with_ac_var:
+        undefined_pattern = undefined_pattern + r"|" + undefined_at_pattern
+
+    undefined_regex = re.compile(undefined_pattern)
+
+    if undefined_regex.search(slice):
+        return True
+
+
+def check_undefined(slices, with_ac_var=False):
     """Checking whether slices has undefined variables."""
     for slice in slices:
-        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice):
+        if check_one_undefined_slice(slice, with_ac_var):
             return True
     return False
 
 
-def _check_undefined_self(slices, self_var):
+def check_one_undefined_slice_self(slice, self_var):
+    search = re.search(r"\$\(?([a-zA-Z_][a-zA-Z0-9_]*)\)?", slice)
+    if search:
+        append_var = search.group(1)
+        if append_var == self_var:
+            return True
+    return False
+
+
+def check_undefined_self(slices, self_var):
     """Checking undefined slices whether contain itself variables."""
     for slice in slices:
-        search = re.search(r"\$\(?([a-zA-Z_][a-zA-Z0-9_]*)\)?", slice)
-        if search:
-            append_var = search.group(1)
-            if append_var == self_var:
-                return True
+        if check_one_undefined_slice_self(slice, self_var):
+            return True
     return False
 
 
@@ -674,8 +692,8 @@ def macros_line_analyze(line, variables, generator, is_macros_line=False):
             slices.append(temp)
             slices.reverse()
             transfer_word = "".join(slices)
-            if _check_undefined(slices):
-                if _check_undefined(slices):
+            if check_undefined(slices):
+                if check_undefined_self(slices, var):
                     present_option_dict["is_replace"] = False
                     if len(slices) == 1:
                         temp = ""

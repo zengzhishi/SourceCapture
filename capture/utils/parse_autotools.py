@@ -10,6 +10,7 @@
 """
 
 import imp
+import types
 import os
 import sys
 import re
@@ -78,7 +79,7 @@ preset_output_variables = [
     "OBJCFLAGS",
     "OBJCXXFLAGS",
     "LIBS",
-    "LDFLAGS"
+    "LDFLAGS",
 ]
 
 
@@ -159,7 +160,21 @@ class AutoToolsParser(object):
         for file_path in project_scan_result:
             fhandle_am = open(file_path, "r")
             self.makefile_am_info[file_path] = {
-                "variables": {},
+                "variables": {
+                    # Set builtin preset variables for Makefile.am analysis
+                    "top_srcdir": {
+                        "defined": [self._project_path,],
+                        "undefined": [],
+                        "is_replace": False,
+                        "option": {}
+                    },
+                    "top_builddir": {
+                        "defined": [self._build_path,],
+                        "undefined": [],
+                        "is_replace": False,
+                        "option": {}
+                    },
+                },
                 "destinations": {}
             }
             am_pair_var = self.makefile_am_info[file_path]["variables"]
@@ -224,9 +239,6 @@ class AutoToolsParser(object):
                     }
 
                 words = split_line(value)
-                dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
-                at_var_pattern = r"(.*)\@([a-zA-Z_][a-zA-Z0-9_]*)\@(.*)"
-                with_var_line_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
 
                 present_option_dict = self._get_option_level_dict(am_pair_var[key], options, is_in_reverse,
                                                                   True if assig_match else False)
@@ -236,42 +248,20 @@ class AutoToolsParser(object):
 
                 temp = ""
                 for (i, word) in enumerate(words):
-                    # TODO: 针对与 @ARG@ 的类型，现在还没有出来，等明确了configure.ac解析顺序之后在解析还是怎么样
                     temp = temp + " " + word if temp else word
                     if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
                         continue
 
-                    with_var_line_match = with_var_line_regex.match(temp)
-                    # slices will be a reversed list
-                    slices = []
-                    while with_var_line_match:
-                        match_chose = 0
-                        if with_var_line_match.group(1):
-                            match_chose += 2
+                    slices = self._undefined_split(temp, am_pair_var)
 
-                        temp = with_var_line_match.group(1 + match_chose)
-                        undefine_var = with_var_line_match.group(2 + match_chose)
-                        other = with_var_line_match.group(3 + match_chose)
-                        if undefine_var in am_pair_var:
-                            value = am_pair_var[undefine_var]
-                            if len(value["undefined"]) == 0 and value["option"] is None:
-                                undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
-                                temp = temp + undefine_var + other
-                            elif value["option"] is None:
-                                slices.append(other)
-                                slices.append(value["defined"])
-                                slices.append(value["undefined"])
-                            else:
-                                slices.append(other)
-                                slices.append("$({})".format(undefine_var))
-                        else:
-                            slices.append(other)
-                            slices.append("$({})".format(undefine_var))
-                        with_var_line_match = with_var_line_regex.match(temp)
-                    slices.append(temp)
-                    slices.reverse()
                     transfer_word = "".join(slices)
-                    if _check_undefined(slices):
+                    if m4_macros_analysis.check_undefined(slices, with_ac_var=True):
+                        if m4_macros_analysis.check_undefined_self(slices, key):
+                            present_option_dict["is_replace"] = False
+                            # The empty assignment string, causing no change for variable.
+                            if len(slices) == 1:
+                                temp = ""
+                                continue
                         present_option_dict["undefined"].append(transfer_word)
                     else:
                         present_option_dict["defined"].append(transfer_word)
@@ -286,6 +276,50 @@ class AutoToolsParser(object):
                 include_path = os.path.join(folder, include_match.group(1))
                 self._loading_include(am_pair_var, include_path, options, is_in_reverse)
 
+    def _undefined_split(self, line, info_dict=None):
+        if info_dict is None:
+            info_dict = dict()
+        dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
+        at_var_pattern = r"(.*)\@([a-zA-Z_][a-zA-Z0-9_]*)\@(.*)"
+        with_var_line_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
+
+        with_var_line_match = with_var_line_regex.match(line)
+        # slices will be a reversed list
+        slices = []
+        while with_var_line_match:
+            match_chose = 0
+            if with_var_line_match.group(1) is None:
+                match_chose += 3
+
+            line = with_var_line_match.group(1 + match_chose)
+            undefine_var = with_var_line_match.group(2 + match_chose)
+            other = with_var_line_match.group(3 + match_chose)
+            if undefine_var in info_dict:
+                value = info_dict[undefine_var]
+                if len(value["undefined"]) == 0 and value["option"] is None:
+                    undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
+                    line = line + undefine_var + other
+                elif value["option"] is None:
+                    slices.append(other)
+                    slices.append(value["defined"])
+                    slices.append(value["undefined"])
+                else:
+                    slices.append(other)
+                    if match_chose == 0:
+                        slices.append("$({})".format(undefine_var))
+                    else:
+                        slices.append("@{}@".format(undefine_var))
+            else:
+                slices.append(other)
+                if match_chose == 0:
+                    slices.append("$({})".format(undefine_var))
+                else:
+                    slices.append("@{}@".format(undefine_var))
+            with_var_line_match = with_var_line_regex.match(line)
+        slices.append(line)
+        slices.reverse()
+        return slices
+
     def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
         with open(include_path, "r") as include_fin:
             self._reading_makefile_am(am_pair_var, include_fin, options, is_in_reverse)
@@ -299,6 +333,11 @@ class AutoToolsParser(object):
         if len(dict["defined"]) != 0 or len(dict["undefined"]) != 0 or len(dict["option"]) != 0:
             return True, default_N
         return False, 0
+
+    def _check_option_dict_empty(self, dict):
+        if len(dict["defined"]) != 0 or len(dict["undefined"]) != 0 or len(dict["option"]) != 0:
+            return True
+        return False
 
     def _get_option_level_dict(self, start_dict, options, is_in_reverse, is_assign):
         present_dict = start_dict
@@ -465,27 +504,255 @@ class AutoToolsParser(object):
         else:
             sub_makefile_ams = self.makefile_am_info.keys()
 
+        logger.info("sub makefile am: %s" % sub_makefile_ams)
+        # Step 2. Check subdir makefile.am
         for makefile_am in sub_makefile_ams:
             am_infos = self.makefile_am_info.get(makefile_am, dict())
+            am_pair_var = am_infos.get("variables", dict())
 
-            # Step 1.2. Get targets we need.
-            program_regex = re.compile(r"\W+_PROGRAMS")
-            lib_regex = re.compile(r"\W+_LIBRARIES")
-            libtool_regex = re.compile(r"\W+_LTLIBRARIES")
+            # Step 2.1. Get targets we need.
+            program_regex = re.compile(r".+_PROGRAMS")
+            lib_regex = re.compile(r".+_LIBRARIES")
+            libtool_regex = re.compile(r".+_LTLIBRARIES")
 
-            am_infos[key]["target"] = {}
-            target = am_infos[key]["target"]
-            for (key, value) in am_infos.items():
+            am_infos["target"] = {}
+            target = am_infos["target"]
+            # am_global_variables = map(lambda var: "AM_{}".format(var), preset_output_variables)
+            # am_global_variables = list(am_global_variables)
+            # am_global_variables.extend(preset_output_variables)
+            # Step 2.2 search building final target
+            for (key, value) in am_pair_var.items():
                 if program_regex.match(key):
-                    if key
+                    print("?????")
+                    if len(am_pair_var[key].get("option", dict())) == 0:
+                        program_gen = self._get_am_value(key, am_pair_var, am_pair_var[key])
+                        for program_list in program_gen:
+                            for program in program_list:
+                                program = program.replace(".", "_")
+                                target[program] = {"type": "program"}
+
+                elif lib_regex.match(key):
+                    if len(am_pair_var[key].get("option", dict())) == 0:
+                        lib_gen = self._get_am_value(key, am_pair_var, am_pair_var[key])
+                        for lib_list in lib_gen:
+                            for lib in lib_list:
+                                lib = lib.replace(".", "_")
+                                target[lib] = {"type": "lib"}
+
+                elif libtool_regex.match(key):
+                    if len(am_pair_var[key].get("option", dict())) == 0:
+                        libtool_gen = self._get_am_value(key, am_pair_var, am_pair_var[key])
+                        for libtool_list in libtool_gen:
+                            for libtool in libtool_list:
+                                libtool = libtool.replace(".", "_")
+                                target[libtool] = {"type": "libtool"}
+
+                # Step 2.3 Get AM global configure variables.
+                # elif key in am_global_variables:
+                #     values = self._get_am_value(key, am_pair_var, am_pair_var[key])
+                #     if re.match("[a-zA-Z_][a-zA-Z0-9_]*_CPPFLAGS", key):
+                #         global_cppflags = self._get_am_value()
+                #
+                else:
+                    continue
 
 
+            # Step 2.4 Find concentrated target configure variables.
+            flags_suffix = [
+                "CPPFLAGS",
+                "CFLAGS",
+                "CXXFLAGS",
+            ]
+            logger.info("Checking target variable key.")
+            for target_key in target.keys():
+                # 2.4.1 Find sources files
+                key = target_key + "_SOURCES"
+                logger.info(key)
+                if key not in am_pair_var:
+                    #TODO: 考虑将当前目录下的文件使用这个
+                    sources = []
+                else:
+                    sources = []
+                    for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
+                        sources.extend(lines)
+                logger.info(sources)
 
+                # 2.4.2 Find flags
+                # Presently we don't need to use it.
+                key = target_key + "_LDFLAGS"
+                logger.info(key)
+                ld_flags = []
+                if key in am_pair_var:
+                    for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
+                        ld_flags.extend(lines)
 
+                logger.info(ld_flags)
 
+                final_flags = []
+                for suffix in flags_suffix:
+                    key = target_key + "_" + suffix
+                    logger.info(key)
+                    flags = []
+                    if key in am_pair_var:
+                        for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
+                            print("++++++++ %s" % lines)
+                            flags.extend(lines)
+                    logger.info(flags)
+                    final_flags.extend(flags)
 
+                # files may contain include files.
+                target[target_key]["files"] = sources
+                target[target_key]["flags"] = final_flags
+                target[target_key]["ld_flags"] = ld_flags
 
+    def _get_am_value(self, variable, am_pair_var, option_dict):
+        """Try to get value of one variable."""
+        logger.info("# Start check value: %s" % variable)
+        if variable not in am_pair_var:
+            yield [""]
 
+        undefineds = option_dict.get("undefined", list())
+        defineds = option_dict.get("defined", list())
+        options = option_dict.get("option", dict())
+        # if len(options) == 0 and len(undefineds) == 0:
+        #     yield defineds
+        #
+        # elif len(options) == 0:
+            # Local ${} variable has been checking in local variables.
+            # Here we need to check preset_variables and ac_subst variables.
+            # for undefined_list in self._undefined_builder(undefineds, 0, am_pair_var):
+            #     undefined_list.extend(defineds)
+            #     yield undefined_list
+        if len(options) != 0:
+            for option in options:
+                logger.info("Start checking option: %s for %s" % (option, variable))
+                if options[option][True].get("is_replace", False):
+                    # Directly replace
+                    if self._check_option_dict_empty(options[option][True]):
+                        yield self._get_am_value(variable, am_pair_var, options[option][True])
+                else:
+                    if self._check_option_dict_empty(options[option][True]):
+                        merge_option = self._merge_option(option_dict, options[option][True])
+                        yield self._get_am_value(variable, am_pair_var, merge_option)
+
+                if options[option][False].get("is_replace", False):
+                    if self._check_option_dict_empty(options[option][False]):
+                        merge_option = self._merge_option(option_dict, options[option][False])
+                        yield self._get_am_value(variable, am_pair_var, merge_option)
+                else:
+                    if self._check_option_dict_empty(options[option][False]):
+                        yield self._get_am_value(variable, am_pair_var, options[option][False])
+
+        if len(undefineds) == 0:
+            yield defineds
+        else:
+            # Local ${} variable has been checking in local variables.
+            # Here we need to check preset_variables and ac_subst variables.
+            for undefined_list in self._undefined_builder(undefineds, 0, am_pair_var):
+                undefined_list.extend(defineds)
+                yield undefined_list
+
+    def _merge_option(self, src_option, dest_option):
+        result_option = {
+            "defined": dest_option.get("defined", list()),
+            "undefined": dest_option.get("undefined", list())
+        }
+
+        if len(dest_option.get("defined", list())) == 0:
+            result_option["defined"] = src_option.get("defined", list())
+        else:
+            for defined in src_option.get("defined", list()):
+                if defined not in result_option.get("defined", list()):
+                    result_option["defined"].append(defined)
+
+        if len(dest_option.get("defined", list())) == 0:
+            result_option["undefined"] = src_option.get("undefined", list())
+        else:
+            for undefined in src_option.get("undefined", list()):
+                if undefined not in result_option.get("undefined", list()):
+                    result_option["undefined"].append(undefined)
+
+        result_option["option"] = dest_option.get("option", dict())
+        return result_option
+
+    def _undefined_builder(self, undefineds, i, am_pair_var):
+        if i == len(undefineds) - 1:
+            next_gen = [[],]
+        else:
+            next_gen = self._undefined_builder(undefineds, i + 1, am_pair_var)
+        undefined_str = undefineds[i]
+        slices = self._undefined_split(undefined_str, am_pair_var)
+        for probability_slices in self._slice_builder(slices, 0, am_pair_var):
+            probability_slices.reverse()
+            value = "".join(probability_slices)
+            for next_list in next_gen:
+                next_list.append(value)
+                yield next_list
+
+    def _slice_builder(self, slices, i, am_pair_var):
+        """逐级返回slice的可能结果"""
+        if i == len(slices) - 1:
+            next_gen = [[],]
+        else:
+            next_gen = self._slice_builder(slices, i + 1, am_pair_var)
+        present_data = slices[i]
+        dollar_var_pattern = r"\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)"
+        at_var_pattern = r"\@([a-zA-Z_][a-zA-Z0-9_]*)\@"
+        var_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
+        var_match = var_regex.match(present_data)
+        ac_infos = self.configure_ac_info.get("configure_ac", dict())
+        # Match the variable pattern
+        if var_match:
+            if var_match.group(1) is not None:
+                var_name = var_match.group(1)
+                if var_name in am_pair_var:
+                    logger.info("found var_name: %s" % var_name)
+                    for defined_list in self._get_am_value(var_name, am_pair_var, am_pair_var[var_name]):
+                        if isinstance(defined_list, types.GeneratorType):
+                            for choise in defined_list:
+                                present_data = " ".join(choise)
+                                for next_list in next_gen:
+                                    next_list.append(present_data)
+                                    yield next_list
+                        else:
+                            defined_list.reverse()
+                            present_data = " ".join(defined_list)
+                            for next_list in next_gen:
+                                next_list.append(present_data)
+                                yield next_list
+                elif var_name in ac_infos.get("export_variables", dict()):
+                    for defined_list in self._get_ac_value(var_name):
+                        defined_list.reverse()
+                        present_data = " ".join(defined_list)
+                        for next_list in next_gen:
+                            next_list.append(present_data)
+                            yield next_list
+                else:
+                    present_data = ""
+                    for next_list in next_gen:
+                        next_list.append(present_data)
+                        yield next_list
+            else:
+                var_name = var_match.group(2)
+                for defined_list in self._get_ac_value(var_name):
+                    present_data = " ".join(defined_list)
+                    for next_list in next_gen:
+                        next_list.append(present_data)
+                        yield next_list
+        else:
+            for next_list in next_gen:
+                next_list.append(present_data)
+                yield next_list
+        return
+
+    def _get_ac_value(self, variable):
+        """
+            Maybe should be a recursion generator.
+            To simplify ac_value gain yield times, macros line will be the only concentrated probability.
+            TODO: 获取 configure.ac 中的export的变量
+            包含了preset的变量，和使用SUBST导出的变量
+        """
+        yield []
 
 
 def unbalanced_quotes(s):
@@ -522,13 +789,14 @@ if __name__ == "__main__":
     ]
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
     auto_tools_parser.set_makefile_am(make_file_am)
+    auto_tools_parser.build_autotools_target()
     auto_tools_parser.dump_makefile_am_info()
 
-    auto_tools_parser.load_m4_macros()
-    auto_tools_parser.dump_m4_info()
-
-    auto_tools_parser.set_configure_ac()
-    auto_tools_parser.dump_ac_info()
+    # auto_tools_parser.load_m4_macros()
+    # auto_tools_parser.dump_m4_info()
+    #
+    # auto_tools_parser.set_configure_ac()
+    # auto_tools_parser.dump_ac_info()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
