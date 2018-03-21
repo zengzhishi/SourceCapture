@@ -14,6 +14,8 @@ import types
 import os
 import sys
 import re
+import queue
+import copy
 
 if __name__ == "__main__":
     import m4_macros_analysis
@@ -139,6 +141,14 @@ class AutoToolsParser(object):
             dump_data(self.makefile_am_info, output_path)
         else:
             dump_data(self.makefile_am_info, os.path.join(self._output_path, "am_info.json"))
+
+    def try_build_target(self):
+        """可以在这里构建一个比较简单的格式返回"""
+        if len(self.makefile_am_info):
+            return
+        if "target" in self.makefile_am_info:
+            for target in self.makefile_am_info.get("target", dict()):
+                pass
 
     def dump_m4_info(self, output_path=None):
         if output_path:
@@ -517,9 +527,6 @@ class AutoToolsParser(object):
 
             am_infos["target"] = {}
             target = am_infos["target"]
-            # am_global_variables = map(lambda var: "AM_{}".format(var), preset_output_variables)
-            # am_global_variables = list(am_global_variables)
-            # am_global_variables.extend(preset_output_variables)
             # Step 2.2 search building final target
             for (key, value) in am_pair_var.items():
                 if program_regex.match(key):
@@ -547,15 +554,8 @@ class AutoToolsParser(object):
                                 libtool = libtool.replace(".", "_")
                                 target[libtool] = {"type": "libtool"}
 
-                # Step 2.3 Get AM global configure variables.
-                # elif key in am_global_variables:
-                #     values = self._get_am_value(key, am_pair_var, am_pair_var[key])
-                #     if re.match("[a-zA-Z_][a-zA-Z0-9_]*_CPPFLAGS", key):
-                #         global_cppflags = self._get_am_value()
-                #
                 else:
                     continue
-
 
             # Step 2.4 Find concentrated target configure variables.
             flags_suffix = [
@@ -578,25 +578,26 @@ class AutoToolsParser(object):
                 logger.info(sources)
 
                 # 2.4.2 Find flags
-                # Presently we don't need to use it.
+                # Temporarily we don't need to use it.
                 key = target_key + "_LDFLAGS"
                 logger.info(key)
                 ld_flags = []
                 if key in am_pair_var:
                     for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
                         ld_flags.extend(lines)
-
                 logger.info(ld_flags)
 
                 final_flags = []
                 for suffix in flags_suffix:
+
                     key = target_key + "_" + suffix
-                    logger.info(key)
+                    logger.info("#Next key: %s" % key)
                     flags = []
-                    if key in am_pair_var:
-                        for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
-                            print("++++++++ %s" % lines)
-                            flags.extend(lines)
+                    if key not in am_pair_var:
+                        continue
+                    # Iterator each probability
+                    for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
+                        flags.append(lines)
                     logger.info(flags)
                     final_flags.extend(flags)
 
@@ -614,136 +615,187 @@ class AutoToolsParser(object):
         undefineds = option_dict.get("undefined", list())
         defineds = option_dict.get("defined", list())
         options = option_dict.get("option", dict())
-        # if len(options) == 0 and len(undefineds) == 0:
-        #     yield defineds
-        #
-        # elif len(options) == 0:
-            # Local ${} variable has been checking in local variables.
-            # Here we need to check preset_variables and ac_subst variables.
-            # for undefined_list in self._undefined_builder(undefineds, 0, am_pair_var):
-            #     undefined_list.extend(defineds)
-            #     yield undefined_list
         if len(options) != 0:
-            for option in options:
-                logger.info("Start checking option: %s for %s" % (option, variable))
-                if options[option][True].get("is_replace", False):
-                    # Directly replace
-                    if self._check_option_dict_empty(options[option][True]):
-                        yield self._get_am_value(variable, am_pair_var, options[option][True])
+            for final_var_tuple in self._option_builder(option_dict):
+                final_var_dict = self._merge_option(option_dict, dict())
+                for opt, level in final_var_tuple:
+                    final_var_dict = self._merge_option(opt, final_var_dict)
+                logger.info("final_var_dict: %s" % final_var_dict)
+                undefineds = final_var_dict.get("undefined", list())
+                defineds = final_var_dict.get("defined", list())
+
+                if len(undefineds) == 0:
+                    yield defineds
                 else:
-                    if self._check_option_dict_empty(options[option][True]):
-                        merge_option = self._merge_option(option_dict, options[option][True])
-                        yield self._get_am_value(variable, am_pair_var, merge_option)
-
-                if options[option][False].get("is_replace", False):
-                    if self._check_option_dict_empty(options[option][False]):
-                        merge_option = self._merge_option(option_dict, options[option][False])
-                        yield self._get_am_value(variable, am_pair_var, merge_option)
-                else:
-                    if self._check_option_dict_empty(options[option][False]):
-                        yield self._get_am_value(variable, am_pair_var, options[option][False])
-
-        if len(undefineds) == 0:
-            yield defineds
+                    # Local ${} variable has been checking in local variables.
+                    # Here we need to check preset_variables and ac_subst variables.
+                    for undefined_line in self._undefined_builder(final_var_dict, am_pair_var):
+                        copy_defineds = copy.deepcopy(defineds)
+                        copy_defineds.append(undefined_line)
+                        yield copy_defineds
         else:
-            # Local ${} variable has been checking in local variables.
-            # Here we need to check preset_variables and ac_subst variables.
-            for undefined_list in self._undefined_builder(undefineds, 0, am_pair_var):
-                undefined_list.extend(defineds)
-                yield undefined_list
+            if len(undefineds) == 0:
+                yield defineds
+            else:
+                for undefined_line in self._undefined_builder(option_dict, am_pair_var):
+                    copy_defineds = copy.deepcopy(defineds)
+                    copy_defineds.append(undefined_line)
+                    yield copy_defineds
 
-    def _merge_option(self, src_option, dest_option):
-        result_option = {
-            "defined": dest_option.get("defined", list()),
-            "undefined": dest_option.get("undefined", list())
-        }
+    def _undefined_builder(self, var_dict, am_pair_var=None, ac_pair_var=None):
+        """
+            When we calling undefined builder we have been complete top level option check.
+            TODO: 将这个函数修改为同时适用于 ac 部分的 variable 构建
+        """
+        first_queue = queue.Queue()
+        second_queue = queue.Queue()
 
-        if len(dest_option.get("defined", list())) == 0:
-            result_option["defined"] = src_option.get("defined", list())
-        else:
-            for defined in src_option.get("defined", list()):
-                if defined not in result_option.get("defined", list()):
-                    result_option["defined"].append(defined)
+        line = " ".join(var_dict.get("undefined", list()))
+        slices = self._undefined_split(line, am_pair_var)
+        first_queue.put(["",])
 
-        if len(dest_option.get("defined", list())) == 0:
-            result_option["undefined"] = src_option.get("undefined", list())
-        else:
-            for undefined in src_option.get("undefined", list()):
-                if undefined not in result_option.get("undefined", list()):
-                    result_option["undefined"].append(undefined)
-
-        result_option["option"] = dest_option.get("option", dict())
-        return result_option
-
-    def _undefined_builder(self, undefineds, i, am_pair_var):
-        if i == len(undefineds) - 1:
-            next_gen = [[],]
-        else:
-            next_gen = self._undefined_builder(undefineds, i + 1, am_pair_var)
-        undefined_str = undefineds[i]
-        slices = self._undefined_split(undefined_str, am_pair_var)
-        for probability_slices in self._slice_builder(slices, 0, am_pair_var):
-            probability_slices.reverse()
-            value = "".join(probability_slices)
-            for next_list in next_gen:
-                next_list.append(value)
-                yield next_list
-
-    def _slice_builder(self, slices, i, am_pair_var):
-        """逐级返回slice的可能结果"""
-        if i == len(slices) - 1:
-            next_gen = [[],]
-        else:
-            next_gen = self._slice_builder(slices, i + 1, am_pair_var)
-        present_data = slices[i]
         dollar_var_pattern = r"\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)"
         at_var_pattern = r"\@([a-zA-Z_][a-zA-Z0-9_]*)\@"
         var_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
-        var_match = var_regex.match(present_data)
-        ac_infos = self.configure_ac_info.get("configure_ac", dict())
-        # Match the variable pattern
-        if var_match:
-            if var_match.group(1) is not None:
-                var_name = var_match.group(1)
-                if var_name in am_pair_var:
-                    logger.info("found var_name: %s" % var_name)
-                    for defined_list in self._get_am_value(var_name, am_pair_var, am_pair_var[var_name]):
-                        if isinstance(defined_list, types.GeneratorType):
-                            for choise in defined_list:
-                                present_data = " ".join(choise)
-                                for next_list in next_gen:
-                                    next_list.append(present_data)
-                                    yield next_list
-                        else:
-                            defined_list.reverse()
-                            present_data = " ".join(defined_list)
-                            for next_list in next_gen:
-                                next_list.append(present_data)
-                                yield next_list
-                elif var_name in ac_infos.get("export_variables", dict()):
-                    for defined_list in self._get_ac_value(var_name):
-                        defined_list.reverse()
-                        present_data = " ".join(defined_list)
-                        for next_list in next_gen:
-                            next_list.append(present_data)
-                            yield next_list
-                else:
-                    present_data = ""
-                    for next_list in next_gen:
-                        next_list.append(present_data)
-                        yield next_list
+        complete = False
+        level = 0
+        while not complete:
+            q = first_queue if level % 2 == 0 else second_queue
+            next_q = second_queue if level % 2 == 0 else first_queue
+            try:
+                missions = q.get(block=False)
+            except queue.Empty:
+                if level == len(slices) - 1:
+                    complete = True
+                level += 1
+                continue
+
+            slice = slices[level]
+
+            var_match = var_regex.match(slice)
+            if not var_match:
+                missions.append(slice)
+                next_q.put(missions)
             else:
-                var_name = var_match.group(2)
-                for defined_list in self._get_ac_value(var_name):
-                    present_data = " ".join(defined_list)
-                    for next_list in next_gen:
-                        next_list.append(present_data)
-                        yield next_list
-        else:
-            for next_list in next_gen:
-                next_list.append(present_data)
-                yield next_list
-        return
+                export_var_flag = True if var_match.group(2) is not None else False
+                var_name = var_match.group(2) if export_var_flag else var_match.group(1)
+
+                configure_ac_dict = self.configure_ac_info.get("configure_ac", dict())
+                ac_export_vars = configure_ac_dict.get("export_variables", dict())
+
+                if var_name not in am_pair_var and var_name in ac_export_vars:
+                    # builtin preset variables.
+                    for defined_list in self._get_ac_value(var_name):
+                        value = " ".join(defined_list)
+                        temp_missions = copy.deepcopy(missions)
+                        temp_missions.append(value)
+                        next_q.put(temp_missions)
+                elif var_name in am_pair_var:
+                    for defined_list in self._get_am_value(var_name, am_pair_var, am_pair_var[var_name]):
+                        value = " ".join(defined_list)
+                        temp_missions = copy.deepcopy(missions)
+                        temp_missions.append(value)
+                        next_q.put(temp_missions)
+                else:
+                    # Unknown variable.
+                    value = ""
+                    missions.append(value)
+                    next_q.put(missions)
+
+        result_queue = first_queue if level % 2 == 0 else second_queue
+        while not result_queue.empty():
+            try:
+                result_slices = result_queue.get(block=False)
+                yield "".join(result_slices)
+            except queue.Empty:
+                continue
+
+    def _option_builder(self, var_dict):
+        q = queue.Queue()
+
+        # Ignore default N options
+        options = var_dict.get("option", dict())
+        options_key = options.keys()
+        default_prefix = "default_"
+        i = 1
+        defaultN = default_prefix + str(i)
+        if defaultN in options:
+            status = True
+            while status:
+                options_key.pop(defaultN)
+                i += 1
+                defaultN = default_prefix + str(i)
+                status = (defaultN in options)
+
+        new_var_dict = self._merge_option(var_dict, dict())
+        for key in options_key:
+            new_var_dict["option"][key] = options.get(key, dict())
+        missions = [(new_var_dict, 0)]
+        q.put(missions)
+
+        # Start iterating all level option
+        complete = False
+        while not complete:
+            try:
+                missions = q.get(block=False)
+            except queue.Empty:
+                complete = True
+                continue
+
+            option_check_flag = True
+            for i, mission in enumerate(missions):
+                var_dict = mission[0]
+                level = mission[1]
+                if "option" not in mission[0] and True in mission[0]:
+                    # option level
+                    true_missions = missions[:i]
+                    true_opt = mission[0].get(True, dict())
+                    true_missions.append((true_opt, level + 1))
+                    true_missions.extend(missions[i + 1:])
+
+                    false_missions = missions[:i]
+                    false_opt = mission[0].get(False, dict())
+                    false_missions.append((false_opt, level + 1))
+                    false_missions.extend(missions[i + 1:])
+
+                    q.put(true_missions)
+                    q.put(false_missions)
+                    option_check_flag = False
+                    break
+
+                if "option" in mission[0]:
+                    # var_dict level
+                    options = var_dict.get("option", dict())
+                    option_keys = options.keys()
+                    if len(option_keys) != 0:
+                        start_missions = missions[:i]
+                        for option in options:
+                            option_dict = options[option]
+                            start_missions.append((option_dict, level))
+                        start_missions.extend(missions[i + 1:])
+                        q.put(start_missions)
+                        option_check_flag = False
+                        break
+            # Checking return type
+            if len(missions) != 0 and option_check_flag:
+                yield missions
+
+    def _merge_option(self, src_option, dest_option):
+        result_option = {
+            "defined": copy.deepcopy(dest_option.get("defined", list())),
+            "undefined": copy.deepcopy(dest_option.get("undefined", list()))
+        }
+
+        for defined in src_option.get("defined", list()):
+            if defined not in result_option.get("defined", list()):
+                result_option["defined"].append(defined)
+
+        for undefined in src_option.get("undefined", list()):
+            if undefined not in result_option.get("undefined", list()):
+                result_option["undefined"].append(undefined)
+
+        result_option["option"] = dest_option.get("option", dict())
+        return result_option
 
     def _get_ac_value(self, variable):
         """
@@ -753,6 +805,8 @@ class AutoToolsParser(object):
             包含了preset的变量，和使用SUBST导出的变量
         """
         yield []
+
+
 
 
 def unbalanced_quotes(s):
@@ -787,15 +841,17 @@ if __name__ == "__main__":
     make_file_am = [
         am_path,
     ]
+
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
+    auto_tools_parser.load_m4_macros()
+    auto_tools_parser.set_configure_ac()
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.build_autotools_target()
+
     auto_tools_parser.dump_makefile_am_info()
 
-    # auto_tools_parser.load_m4_macros()
     # auto_tools_parser.dump_m4_info()
     #
-    # auto_tools_parser.set_configure_ac()
     # auto_tools_parser.dump_ac_info()
 
 
