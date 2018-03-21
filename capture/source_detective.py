@@ -592,3 +592,33 @@ class CMakeAnalyzer(Analyzer):
             source_infos.append(cxx_files_info)
 
         return source_infos, include_files, files_count
+
+
+class AutoToolsAnalyzer(Analyzer):
+    def get_project_infos_autotools(self):
+        paths = []
+        files_s = []
+        files_h = []
+        files_am = []
+        for line_tulpe in self.selective_walk():
+            folder = line_tulpe[0]
+            file_paths = line_tulpe[1]
+            paths.append(folder)
+            for file_path in file_paths:
+                slice = file_path.split('.')
+                suffix = slice[-1]
+                if len(slice) > 1:
+                    if suffix in source_file_suffix:
+                        files_s.append(os.path.join(folder, file_path))
+                    elif suffix in include_file_suffix:
+                        files_h.append(os.path.join(folder, file_path))
+                    elif suffix == "am":
+                        files_am.append(os.path.join(folder, file_path))
+
+        autotools_project_info = {
+            "sub_path": paths,
+            "sources": files_s,
+            "includes": files_h,
+        }
+        return paths, files_s, files_h
+

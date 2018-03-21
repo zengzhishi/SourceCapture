@@ -16,6 +16,7 @@ import sys
 import re
 import queue
 import copy
+import random
 
 if __name__ == "__main__":
     import m4_macros_analysis
@@ -112,6 +113,15 @@ def dump_data(json_dict, output_path):
         json.dump(json_dict, fout, indent=4)
 
 
+def sort_flags_line(flags, reverse=False):
+    if not isinstance(reverse, bool):
+        logger.warning("Unknown reverse flag use, use default reverse: %s" % reverse)
+        reverse = False
+    regex = re.compile(r"\s+-D[a-z_A-Z][a-zA-Z0-9_]*")
+    sorted_flags = sorted(flags, key=lambda line: len(regex.findall(line)), reverse=reverse)
+    return sorted_flags
+
+
 class AutoToolsParser(object):
     _fhandle_configure_ac = None
 
@@ -142,13 +152,69 @@ class AutoToolsParser(object):
         else:
             dump_data(self.makefile_am_info, os.path.join(self._output_path, "am_info.json"))
 
-    def try_build_target(self):
+    def try_build_target(self, makefile_path, files=[]):
         """可以在这里构建一个比较简单的格式返回"""
-        if len(self.makefile_am_info):
+        if len(self.makefile_am_info.get(makefile_path, dict())) == 0:
             return
-        if "target" in self.makefile_am_info:
-            for target in self.makefile_am_info.get("target", dict()):
-                pass
+        make_info = self.makefile_am_info.get(makefile_path, dict())
+        path = os.path.dirname(makefile_path)
+        if "target" in make_info:
+            targets = make_info.get("target", dict())
+            for target_key, target in targets.items():
+                # Build files
+                if len(target.get("files", list())) != 0:
+                    files = target.get("files", list())
+                    # Avoid unknown list contains list problem
+                    move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and g(y) or [y]))
+                    files = list(move_to_top(files))
+                    for file_line in files:
+                        sub_files = re.split(r"\s+", file_line)
+                        c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False,
+                                           sub_files)
+                        cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in \
+                                                                     ["cxx", "cpp", "cc"] else False, sub_files)
+                        target["c_files"] = list(c_files)
+                        target["cpp_files"] = list(cpp_files)
+                # Get test case
+                c_case = None
+                cpp_case = None
+                if "c_files" in target and len(target.get("c_files", list())) != 0:
+                    c_files = target.get("c_files", list())
+                    idx = random.randint(0, len(c_files))
+                    c_case = os.path.join(path, c_files[idx])
+                if "cpp_files" in target and len(target.get("cpp_files", list())) != 0:
+                    cpp_files = target.get("cpp_files", list())
+                    idx = random.randint(0, len(cpp_files))
+                    cpp_case = os.path.join(path, cpp_files[idx])
+
+                # Try build
+                if c_case is None and cpp_case is None:
+                    return
+                else:
+                    if "flags" not in target:
+                        target["c_flags"] = []
+                        target["cpp_flags"] = []
+                        continue
+                    for flag_name, flags in target["flags"]:
+                        if flag_name == "CFLAGS":
+                            # 1. 排序，根据-D参数数目由 小到大
+                            # 2. 切分，将 flags切分成 macros 和 includes 和 other
+                            # 3. 组成 info_dict 返回
+                            sorted_flags = sort_flags_line(flags)
+                            for line in sorted_flags:
+                                words = split_line(line)
+
+                                temp = ""
+                                for (i, word) in enumerate(words):
+                                    temp = temp + " " + word if temp else word
+                                    if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+                                        continue
+
+                                    pass
+
+                                    temp = ""
+
+                    pass
 
     def dump_m4_info(self, output_path=None):
         if output_path:
@@ -587,9 +653,8 @@ class AutoToolsParser(object):
                         ld_flags.extend(lines)
                 logger.info(ld_flags)
 
-                final_flags = []
+                final_flags = {}
                 for suffix in flags_suffix:
-
                     key = target_key + "_" + suffix
                     logger.info("#Next key: %s" % key)
                     flags = []
@@ -599,7 +664,7 @@ class AutoToolsParser(object):
                     for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
                         flags.append(lines)
                     logger.info(flags)
-                    final_flags.extend(flags)
+                    final_flags[suffix] = flags
 
                 # files may contain include files.
                 target[target_key]["files"] = sources
@@ -807,8 +872,6 @@ class AutoToolsParser(object):
         yield []
 
 
-
-
 def unbalanced_quotes(s):
     single = 0
     double = 0
@@ -843,10 +906,11 @@ if __name__ == "__main__":
     ]
 
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
-    auto_tools_parser.load_m4_macros()
-    auto_tools_parser.set_configure_ac()
+    # auto_tools_parser.load_m4_macros()
+    # auto_tools_parser.set_configure_ac()
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.build_autotools_target()
+    auto_tools_parser.try_build_target(make_file_am[0])
 
     auto_tools_parser.dump_makefile_am_info()
 
