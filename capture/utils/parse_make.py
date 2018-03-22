@@ -290,7 +290,7 @@ def parse_flags(build_log_in, build_dir,
         "-[iIDF].*",
         "-std=[a-z0-9+]+",
         "-(no)?std(lib|inc)",
-        "-D([a-zA-Z0-9_]+)=(.*)"
+        "-D([a-zA-Z_][a-zA-Z0-9_]*)=(.*)"
     ]
     flags_whitelist = re.compile("|".join(map("^{}$".format, flags_whitelist)))
 
@@ -347,11 +347,11 @@ def parse_flags(build_log_in, build_dir,
             if file_regex.match(word):
                 filepath = word
 
+            # make -n output command may have a string "..." as argument, there can insert some flags.
             if word[0] != '-' or not flags_whitelist.match(word):
                 # phony target
                 word_strip_quotes = strip_quotes(word)
                 if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
-                    # transfer equal value to double quotes
                     quetos_words = split_cmd_line(word_strip_quotes)
                     if len(quetos_words) > 1:
                         for (i, quetos_word) in enumerate(quetos_words):
@@ -377,7 +377,9 @@ def parse_flags(build_log_in, build_dir,
                             if not invalid_include_regex.match(p):
                                 arguments.append(opt + p)
                         elif word_strip_quotes.startswith("-D"):
-                            definition_with_value = re.compile("^-D([a-zA-Z0-9_]+)=(.*)$")
+                            # When macros flags in quote line, it may have a original format, which can't be compiled
+                            # directly. So we need to add quote for macros with assignment
+                            definition_with_value = re.compile("^-D([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$")
                             definition_with_value_match = definition_with_value.match(word_strip_quotes)
                             if definition_with_value_match:
                                 key = definition_with_value_match.group(1)
@@ -387,7 +389,7 @@ def parse_flags(build_log_in, build_dir,
                             arguments.append(word_strip_quotes)
                 continue
 
-            # include arguments for this option, if there are any, as a tuple
+            # include arguments for this option
             if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
@@ -404,7 +406,6 @@ def parse_flags(build_log_in, build_dir,
                 if word.startswith("-I"):
                     opt = word[0:2]
                     val = word[2:]
-                    # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
                     if os.path.isabs(val[0]):
                         p = val
                     else:

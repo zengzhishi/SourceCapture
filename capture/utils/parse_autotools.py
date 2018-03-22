@@ -74,6 +74,7 @@ appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*(.*)")
 
 # remove [ -o ] witch maybe not present in Makefile.am flags
 filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
+invalid_include_regex = re.compile("(^.*out/.+_intermediates.*$)|(.+/proguard.flags$)")
 
 preset_output_variables = [
     "CXXFLAGS",
@@ -117,9 +118,52 @@ def sort_flags_line(flags, reverse=False):
     if not isinstance(reverse, bool):
         logger.warning("Unknown reverse flag use, use default reverse: %s" % reverse)
         reverse = False
+
+    striped_flags = map(lambda line: line.strip(" \t\n"), flags)
+    lines = set(striped_flags)
     regex = re.compile(r"\s+-D[a-z_A-Z][a-zA-Z0-9_]*")
-    sorted_flags = sorted(flags, key=lambda line: len(regex.findall(line)), reverse=reverse)
+    sorted_flags = sorted(list(lines), key=lambda line: len(regex.findall(line)), reverse=reverse)
     return sorted_flags
+
+
+def format_flags(line, path):
+    words = split_line(line)
+    includes = []
+    macros = []
+    flags = []
+    temp = ""
+    for (i, word) in enumerate(words):
+        temp = temp + " " + word if temp else word
+        if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+            continue
+
+        filename_flags_regex = re.compile("|".join(map("^{}".format, filename_flags)))
+        if filename_flags_regex.match(temp):
+            if temp.startswith("-I"):
+                include_path = temp[2:].strip()
+                if not os.path.isabs(include_path):
+                    include_path = os.path.join(path, include_path)
+                includes.append(include_path)
+            else:
+                flags.append(temp)
+
+        elif temp.startswith("-D"):
+            macros_with_value_regex = re.compile("^-D([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$")
+            macros_with_value_match = macros_with_value_regex.match(temp)
+            if macros_with_value_match:
+                key = macros_with_value_match.group(1)
+                value = macros_with_value_match.group(2)
+                value = "'{}'".format(value)
+                temp = "{}={}".format(key, value)
+            else:
+                temp = temp[2:].strip()
+            macros.append(temp)
+
+        else:
+            flags.append(temp)
+
+        temp = ""
+    return (includes, macros, flags)
 
 
 class AutoToolsParser(object):
@@ -152,70 +196,6 @@ class AutoToolsParser(object):
         else:
             dump_data(self.makefile_am_info, os.path.join(self._output_path, "am_info.json"))
 
-    def try_build_target(self, makefile_path, files=[]):
-        """可以在这里构建一个比较简单的格式返回"""
-        if len(self.makefile_am_info.get(makefile_path, dict())) == 0:
-            return
-        make_info = self.makefile_am_info.get(makefile_path, dict())
-        path = os.path.dirname(makefile_path)
-        if "target" in make_info:
-            targets = make_info.get("target", dict())
-            for target_key, target in targets.items():
-                # Build files
-                if len(target.get("files", list())) != 0:
-                    files = target.get("files", list())
-                    # Avoid unknown list contains list problem
-                    move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and g(y) or [y]))
-                    files = list(move_to_top(files))
-                    for file_line in files:
-                        sub_files = re.split(r"\s+", file_line)
-                        c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False,
-                                           sub_files)
-                        cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in \
-                                                                     ["cxx", "cpp", "cc"] else False, sub_files)
-                        target["c_files"] = list(c_files)
-                        target["cpp_files"] = list(cpp_files)
-                # Get test case
-                c_case = None
-                cpp_case = None
-                if "c_files" in target and len(target.get("c_files", list())) != 0:
-                    c_files = target.get("c_files", list())
-                    idx = random.randint(0, len(c_files))
-                    c_case = os.path.join(path, c_files[idx])
-                if "cpp_files" in target and len(target.get("cpp_files", list())) != 0:
-                    cpp_files = target.get("cpp_files", list())
-                    idx = random.randint(0, len(cpp_files))
-                    cpp_case = os.path.join(path, cpp_files[idx])
-
-                # Try build
-                if c_case is None and cpp_case is None:
-                    return
-                else:
-                    if "flags" not in target:
-                        target["c_flags"] = []
-                        target["cpp_flags"] = []
-                        continue
-                    for flag_name, flags in target["flags"]:
-                        if flag_name == "CFLAGS":
-                            # 1. 排序，根据-D参数数目由 小到大
-                            # 2. 切分，将 flags切分成 macros 和 includes 和 other
-                            # 3. 组成 info_dict 返回
-                            sorted_flags = sort_flags_line(flags)
-                            for line in sorted_flags:
-                                words = split_line(line)
-
-                                temp = ""
-                                for (i, word) in enumerate(words):
-                                    temp = temp + " " + word if temp else word
-                                    if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
-                                        continue
-
-                                    pass
-
-                                    temp = ""
-
-                    pass
-
     def dump_m4_info(self, output_path=None):
         if output_path:
             dump_data(self.m4_macros_info, output_path)
@@ -227,6 +207,112 @@ class AutoToolsParser(object):
             dump_data(self.configure_ac_info, output_path)
         else:
             dump_data(self.configure_ac_info, os.path.join(self._output_path, "configure_ac_info.json"))
+
+    def try_build_target(self, makefile_path, files=None, c_compiler="cc", cxx_compiler="g++"):
+        """Attempt to use compiler flags to compile a case, if it pass, we can use the present macros flags."""
+        if len(self.makefile_am_info.get(makefile_path, dict())) == 0:
+            return
+        make_info = self.makefile_am_info.get(makefile_path, dict())
+        path = os.path.dirname(makefile_path)
+        if "target" not in make_info:
+            return
+
+        targets = make_info.get("target", dict())
+        for target_key, target in targets.items():
+            # Build files
+            if len(target.get("files", list())) != 0:
+                files = target.get("files", list())
+                # Avoid unknown list contains list problem
+                move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and g(y) or [y]))
+                files = list(move_to_top(files))
+                for file_line in files:
+                    sub_files = re.split(r"\s+", file_line)
+                    c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False,
+                                       sub_files)
+                    cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in \
+                                                                 ["cxx", "cpp", "cc"] else False, sub_files)
+                    target["c_files"] = list(c_files)
+                    target["cxx_files"] = list(cpp_files)
+            # Get test case
+            c_case = None
+            cxx_case = None
+            if "c_files" in target and len(target.get("c_files", list())) != 0:
+                                                                           c_files = target.get("c_files", list())
+                                                                           idx = random.randint(0, len(c_files))
+                                                                           c_case = os.path.join(path, c_files[idx])
+            if "cxx_files" in target and len(target.get("cxx_files", list())) != 0:
+                cxx_files = target.get("cxx_files", list())
+                idx = random.randint(0, len(cxx_files))
+                cxx_case = os.path.join(path, cxx_files[idx])
+
+            # Try build
+            if c_case is None and cxx_case is None:
+                return
+            else:
+                if "flags" not in target:
+                    target["c_flags"] = {}
+                    target["cpp_flags"] = {}
+                    continue
+
+                if "CPPFLAGS" in target.get("flags", dict()):
+                    cppsorted_flags = target["flags"].get("CPPFLAGS", list())
+                else:
+                    cppsorted_flags = [""]
+
+                c_compiler_status = False
+                cxx_compiler_status = False
+                sorted_cppsorted_flags = sort_flags_line(cppsorted_flags)
+                for lines in sorted_cppsorted_flags:
+                    default_includes, default_macros, default_flags = format_flags(lines, path)
+                    # Autotools all add
+                    default_macros.append("HAVE_CONFIG_H")
+
+                    for flag_name in ["CFLAGS", "CXXFLAGS"]:
+                        flags_line = target["flags"].get(flag_name, [""])
+                        name = "c_flags" if flag_name == "CFLAGS" else "cxx_flags"
+                        case = c_case if flag_name == "CFLAGS" else cxx_case
+                        if case is None:
+                            if flag_name == "CFLAGS":
+                                c_compiler_status = True
+                            if flag_name == "CXXFLAGS":
+                                cxx_compiler_status = True
+                            continue
+                        compiler = c_compiler if flag_name == "CFLAGS" else cxx_compiler
+                        sorted_flags = sort_flags_line(flags_line)
+                        for line in sorted_flags:
+                            includes, macros, flags = format_flags(line, path)
+                            includes.extend(default_includes)
+                            macros.extend(default_macros)
+                            flags.extend(default_flags)
+                            include_line = " ".join(map("-I{}".format, includes))
+                            macros_line = " ".join(map("-D{}".format, macros))
+                            flags_line = " ".join(flags)
+                            cmd = "{} -c {} -o {} {} {} {}".format(
+                                compiler, case, os.path.join(self._build_path, c_case + ".o"),
+                                include_line, macros_line, flags_line
+                            )
+                            (returncode, out, err) = capture_util.subproces_calling(cmd, path)
+                            if returncode == 0:
+                                logger.info("Try compile for target: %s success." % target_key)
+                                target[name] = {
+                                    "definitions": macros,
+                                    "includes": includes,
+                                    "flags": flags,
+                                }
+                                if flag_name == "CFLAGS":
+                                    c_compiler_status = True
+                                if flag_name == "CXXFLAGS":
+                                    cxx_compiler_status = True
+                                break
+                    if c_compiler_status and cxx_compiler_status:
+                        break
+        return
+
+    def try_build_all_am_target(self, c_compiler="cc", cxx_compiler="g++"):
+        for makefile_path in self.makefile_am_info:
+            self.try_build_target(makefile_path, c_compiler=c_compiler, cxx_compiler=cxx_compiler)
+
+        return
 
     def set_makefile_am(self, project_scan_result):
         """
@@ -251,16 +337,14 @@ class AutoToolsParser(object):
                         "option": {}
                     },
                 },
-                "destinations": {}
             }
             am_pair_var = self.makefile_am_info[file_path]["variables"]
-            am_pair_dest = self.makefile_am_info[file_path]["destinations"]
 
-            self._reading_makefile_am(am_pair_var, fhandle_am)
+            self._reading_makefile_am(am_pair_var, fhandle_am, options=list(), is_in_reverse=list())
             fhandle_am.close()
         return
 
-    def _reading_makefile_am(self, am_pair_var, fhandle_am, options=[], is_in_reverse=[]):
+    def _reading_makefile_am(self, am_pair_var, fhandle_am, options=list(), is_in_reverse=list()):
         tmp_line = ""
         option_regexs = (
             (re.compile("if\s+(.*)"), "positive"),
@@ -353,6 +437,12 @@ class AutoToolsParser(object):
                 self._loading_include(am_pair_var, include_path, options, is_in_reverse)
 
     def _undefined_split(self, line, info_dict=None):
+        """
+        A split util function for cutting undefined line into pieces.
+        :param line:            A string contains of undefined var.
+        :param info_dict:       Checking dict for checking variable value.
+        :return:
+        """
         if info_dict is None:
             info_dict = dict()
         dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
@@ -397,6 +487,7 @@ class AutoToolsParser(object):
         return slices
 
     def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
+        """Loading include Makefile file."""
         with open(include_path, "r") as include_fin:
             self._reading_makefile_am(am_pair_var, include_fin, options, is_in_reverse)
 
@@ -416,6 +507,7 @@ class AutoToolsParser(object):
         return False
 
     def _get_option_level_dict(self, start_dict, options, is_in_reverse, is_assign):
+        """Get present option status dict"""
         present_dict = start_dict
         has_default, default_N = self._check_global_dict_empty(present_dict)
         if len(options) == 0 and is_assign and has_default:
@@ -435,6 +527,7 @@ class AutoToolsParser(object):
         return present_dict
 
     def set_configure_ac(self):
+        """Loading configure.ac file info"""
         if self._fhandle_configure_ac is None:
             config_file_name = self._check_configure_scan()
             if config_file_name:
@@ -476,6 +569,7 @@ class AutoToolsParser(object):
             logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
 
     def _check_configure_scan(self):
+        """Checking configure scan files"""
         for file_name in CONFIGURE_AC_NAMES:
             file_path = os.path.join(self._project_path, file_name)
             if os.path.exists(file_path):
@@ -483,6 +577,7 @@ class AutoToolsParser(object):
         return None
 
     def _preload_m4_config(self, configure_ac_filepath):
+        """Use shell util to get specific line from configure_ac file, here we search the MACROS dir"""
         cmd = "fgrep \"{}\" {}".format("AC_CONFIG_MACRO_DIR", configure_ac_filepath)
         (returncode, out, err) = capture_util.subproces_calling(cmd)
 
@@ -499,6 +594,7 @@ class AutoToolsParser(object):
         return m4_folders
 
     def _get_m4_folder(self):
+        """Checking m4 folder path from configure_ac file"""
         if "macros_dir" not in self.configure_ac_info:
             config_file_name = self._check_configure_scan()
             if config_file_name:
@@ -542,7 +638,7 @@ class AutoToolsParser(object):
         logger.info("m4 files loading complete.")
 
     def build_ac_export_infos(self):
-        """利用variables构建export_variables"""
+        """Setting up export_variables value from variables."""
         if not self.configure_ac_info:
             return
         export_variables = self.configure_ac_info["configure_ac"]["export_variables"]
@@ -569,7 +665,7 @@ class AutoToolsParser(object):
             export_variables[preset_export_var] = src
 
     def build_autotools_target(self):
-        """利用 ac infos 和 am infos来构建最终目标的flags"""
+        """Using ac_infos and am_infos to build up the final target flags."""
         # Step 1. Check out whether is a root_path makefile.am
         root_path_makefile = os.path.join(self._project_path, "Makefile.am")
         if root_path_makefile in self.makefile_am_info:
@@ -583,6 +679,7 @@ class AutoToolsParser(object):
         logger.info("sub makefile am: %s" % sub_makefile_ams)
         # Step 2. Check subdir makefile.am
         for makefile_am in sub_makefile_ams:
+            logger.info("## Start building %s" % makefile_am)
             am_infos = self.makefile_am_info.get(makefile_am, dict())
             am_pair_var = am_infos.get("variables", dict())
 
@@ -595,8 +692,9 @@ class AutoToolsParser(object):
             target = am_infos["target"]
             # Step 2.2 search building final target
             for (key, value) in am_pair_var.items():
+                print(key)
+                logger.info("### Checking target.")
                 if program_regex.match(key):
-                    print("?????")
                     if len(am_pair_var[key].get("option", dict())) == 0:
                         program_gen = self._get_am_value(key, am_pair_var, am_pair_var[key])
                         for program_list in program_gen:
@@ -661,8 +759,8 @@ class AutoToolsParser(object):
                     if key not in am_pair_var:
                         continue
                     # Iterator each probability
-                    for lines in self._get_am_value(key, am_pair_var, am_pair_var[key]):
-                        flags.append(lines)
+                    for defineds in self._get_am_value(key, am_pair_var, am_pair_var[key]):
+                        flags.append(" ".join(defineds))
                     logger.info(flags)
                     final_flags[suffix] = flags
 
@@ -672,7 +770,15 @@ class AutoToolsParser(object):
                 target[target_key]["ld_flags"] = ld_flags
 
     def _get_am_value(self, variable, am_pair_var, option_dict):
-        """Try to get value of one variable."""
+        """
+        Try to get value of one variable.
+
+        :param variable:                variable to get value.
+        :param am_pair_var:             where to query variable value.
+        :param option_dict:             start option level.
+        :return:
+            defined_list:   @list       a list of value has been defined.(without unknown variable.)
+        """
         logger.info("# Start check value: %s" % variable)
         if variable not in am_pair_var:
             yield [""]
@@ -776,6 +882,11 @@ class AutoToolsParser(object):
                 continue
 
     def _option_builder(self, var_dict):
+        """
+        Generator to recall option dict, which will search all level option.
+        :param var_dict:                variable store dict
+        :return:
+        """
         q = queue.Queue()
 
         # Ignore default N options
@@ -846,6 +957,7 @@ class AutoToolsParser(object):
                 yield missions
 
     def _merge_option(self, src_option, dest_option):
+        """Util function to copy data from src_option to dest_option."""
         result_option = {
             "defined": copy.deepcopy(dest_option.get("defined", list())),
             "undefined": copy.deepcopy(dest_option.get("undefined", list()))
@@ -897,20 +1009,28 @@ if __name__ == "__main__":
     if len(sys.argv) == 3:
         project_path = sys.argv[1]
         am_path = sys.argv[2]
+    elif len(sys.argv) == 2:
+        project_path = sys.argv[1]
+        am_path = None
     else:
         sys.stderr.write("Fail! Please input path and am path.\n")
         exit(-1)
 
-    make_file_am = [
-        am_path,
-    ]
+    if am_path is None:
+        make_file_am = [
+            "/home/zengzhishi/pinpoint-demo/curl-master/src/Makefile.am",
+            "/home/zengzhishi/pinpoint-demo/curl-master/lib/Makefile.am",
+        ]
+    else:
+        make_file_am = [am_path,]
 
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
     # auto_tools_parser.load_m4_macros()
     # auto_tools_parser.set_configure_ac()
     auto_tools_parser.set_makefile_am(make_file_am)
     auto_tools_parser.build_autotools_target()
-    auto_tools_parser.try_build_target(make_file_am[0])
+    # auto_tools_parser.try_build_target(make_file_am[0])
+    auto_tools_parser.try_build_all_am_target()
 
     auto_tools_parser.dump_makefile_am_info()
 
