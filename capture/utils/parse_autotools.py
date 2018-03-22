@@ -17,6 +17,7 @@ import re
 import queue
 import copy
 import random
+import json
 
 if __name__ == "__main__":
     import m4_macros_analysis
@@ -109,7 +110,6 @@ def split_line(line):
 
 
 def dump_data(json_dict, output_path):
-    import json
     with open(output_path, "w") as fout:
         json.dump(json_dict, fout, indent=4)
 
@@ -168,6 +168,7 @@ def format_flags(line, path):
 
 class AutoToolsParser(object):
     _fhandle_configure_ac = None
+    _temp_options = {}
 
     def __init__(self, project_path, output_path, build_path=None):
         self._project_path = project_path
@@ -207,6 +208,14 @@ class AutoToolsParser(object):
             dump_data(self.configure_ac_info, output_path)
         else:
             dump_data(self.configure_ac_info, os.path.join(self._output_path, "configure_ac_info.json"))
+
+    def load_ac_info_from_json(self):
+        with open(os.path.join(self._output_path, "configure_ac_info.json"), "r") as fin:
+            self.configure_ac_info = json.load(fin)
+
+    def load_am_info_from_json(self):
+        with open(os.path.join(self._output_path, "am_info.json"), "r") as fin:
+            self.makefile_am_info = json.load(fin)
 
     def try_build_target(self, makefile_path, files=None, c_compiler="cc", cxx_compiler="g++"):
         """Attempt to use compiler flags to compile a case, if it pass, we can use the present macros flags."""
@@ -649,7 +658,7 @@ class AutoToolsParser(object):
             if len(src) == 0:
                 continue
 
-            if len(dest.get("defined", [])) != 0 or len(dest.get("undefined"), []) != 0:
+            if len(dest.get("defined", list())) != 0 or len(dest.get("undefined", list())) != 0:
                 continue
 
             export_variables[export_var] = src
@@ -692,8 +701,6 @@ class AutoToolsParser(object):
             target = am_infos["target"]
             # Step 2.2 search building final target
             for (key, value) in am_pair_var.items():
-                print(key)
-                logger.info("### Checking target.")
                 if program_regex.match(key):
                     if len(am_pair_var[key].get("option", dict())) == 0:
                         program_gen = self._get_am_value(key, am_pair_var, am_pair_var[key])
@@ -769,6 +776,217 @@ class AutoToolsParser(object):
                 target[target_key]["flags"] = final_flags
                 target[target_key]["ld_flags"] = ld_flags
 
+    def _undefined_builder(self, var_dict, am_pair_var=None, for_ac=False):
+        """
+            When we calling undefined builder we have been complete top level option check.
+            TODO: 将这个函数修改为同时适用于 ac 部分的 variable 构建
+        """
+        first_queue = queue.Queue()
+        second_queue = queue.Queue()
+
+        line = " ".join(var_dict.get("undefined", list()))
+        slices = self._undefined_split(line, am_pair_var)
+        first_queue.put(["",])
+
+        dollar_var_pattern = r"\s*\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)"
+        at_var_pattern = r"\s*\@([a-zA-Z_][a-zA-Z0-9_]*)\@"
+        var_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
+        complete = False
+        level = 0
+        while not complete:
+            q = first_queue if level % 2 == 0 else second_queue
+            next_q = second_queue if level % 2 == 0 else first_queue
+            try:
+                missions = q.get(block=False)
+            except queue.Empty:
+                logger.info("level: {}, len: {}".format(level, len(slices)))
+                if level == len(slices) - 1:
+                    complete = True
+                level += 1
+                continue
+
+            slice = slices[level]
+            var_match = var_regex.match(slice)
+            with_blank = True if re.match("\s+", slice) else False
+            if not var_match:
+                missions.append(slice)
+                next_q.put(missions)
+            else:
+                export_var_flag = True if var_match.group(2) is not None else False
+                var_name = var_match.group(2) if export_var_flag else var_match.group(1)
+
+                configure_ac_dict = self.configure_ac_info.get("configure_ac", dict())
+                ac_export_vars = configure_ac_dict.get("export_variables", dict())
+
+                print("++++ Check var: %s" % var_name)
+                if var_name in am_pair_var and for_ac:
+                    for defined_list in self._get_ac_value(var_name, am_pair_var,
+                                                           am_pair_var.get(var_name, dict())):
+                        value = " ".join(defined_list)
+                        value = " " + value if with_blank else value
+                        temp_missions = copy.deepcopy(missions)
+                        temp_missions.append(value)
+                        next_q.put(temp_missions)
+                if not for_ac and var_name not in am_pair_var and var_name in ac_export_vars:
+                    # builtin preset variables.
+                    for defined_list in self._get_ac_value(var_name):
+                        print("call ac: %s" % defined_list)
+                        value = " ".join(defined_list)
+                        value = " " + value if with_blank else value
+                        temp_missions = copy.deepcopy(missions)
+                        temp_missions.append(value)
+                        next_q.put(temp_missions)
+                elif var_name in am_pair_var and not for_ac:
+                    for defined_list in self._get_am_value(var_name, am_pair_var, am_pair_var[var_name]):
+                        value = " ".join(defined_list)
+                        value = " " + value if with_blank else value
+                        temp_missions = copy.deepcopy(missions)
+                        temp_missions.append(value)
+                        next_q.put(temp_missions)
+                else:
+                    # Unknown variable.
+                    value = ""
+                    value = " " + value if with_blank else value
+                    missions.append(value)
+                    next_q.put(missions)
+
+        result_queue = first_queue if level % 2 == 0 else second_queue
+        while not result_queue.empty():
+            try:
+                result_slices = result_queue.get(block=False)
+                yield "".join(result_slices)
+            except queue.Empty:
+                continue
+
+    def _option_builder(self, var_dict, var_place="AM"):
+        """
+        Generator to recall option dict, which will search all level option.
+        :param var_dict:                variable store dict.
+        :param var_place:               temp_options where to save.
+        :return:
+        """
+        # Query options line from _temp_options.
+        if var_place not in self._temp_options:
+            self._temp_options[var_place] = {}
+        var_options = self._temp_options.get(var_place, dict())
+
+        dict_id = id(var_dict)
+        if dict_id in var_options:
+            logger.info("### Found")
+            result_missions_list = var_options.get(dict_id, [""])
+            for missions_line in result_missions_list:
+                yield json.loads(missions_line)
+            return
+        logger.info("### Not Found")
+
+        q = queue.Queue()
+
+        # Ignore default N options
+        options = var_dict.get("option", dict())
+        options_key = options.keys()
+        default_prefix = "default_"
+        i = 1
+        defaultN = default_prefix + str(i)
+        if defaultN in options:
+            status = True
+            while status:
+                options_key.pop(defaultN)
+                i += 1
+                defaultN = default_prefix + str(i)
+                status = (defaultN in options)
+
+        new_var_dict = self._merge_option(var_dict, dict())
+        for key in options_key:
+            new_var_dict["option"][key] = options.get(key, dict())
+        missions = [(new_var_dict, 0)]
+        logger.info("$# start missions: %s" % missions)
+        q.put(missions)
+
+        # Start iterating all level option
+        complete = False
+        result_missions_set = set()
+        while not complete:
+            try:
+                missions = q.get(block=False)
+            except queue.Empty:
+                complete = True
+                continue
+
+            option_check_flag = True
+            for i, mission in enumerate(missions):
+                var_dict = mission[0]
+                level = mission[1]
+                is_bool = True if True in var_dict else False
+                is_bool_str = True if "true" in var_dict else False
+                if "option" not in var_dict and (is_bool or is_bool_str):
+                    # option level
+                    true_missions = missions[:i]
+                    true_opt = var_dict.get(True if is_bool else "true", dict())
+                    true_missions.append((true_opt, level + 1))
+                    true_missions.extend(missions[i + 1:])
+
+                    false_missions = missions[:i]
+                    false_opt = var_dict.get(False if is_bool else "false", dict())
+                    false_missions.append((false_opt, level + 1))
+                    false_missions.extend(missions[i + 1:])
+
+                    q.put(true_missions)
+                    q.put(false_missions)
+                    option_check_flag = False
+                    break
+
+                if "option" in var_dict and len(var_dict.get("option", dict())) != 0:
+                    # var_dict level
+                    options = var_dict.get("option", dict())
+                    # need to contain itself, but release option field
+                    # TODO: 添加一个逻辑，当检查到没有-D 和 -I的时候，就不保存本层的数据, 减小层次
+                    start_missions = missions[:i]
+                    var_dict["option"] = {}
+                    start_missions.append((var_dict, level))
+                    for option in options:
+                        option_dict = options[option]
+                        start_missions.append((option_dict, level))
+                    start_missions.extend(missions[i + 1:])
+                    q.put(start_missions)
+                    option_check_flag = False
+                    break
+            # Checking return type
+            # if len(missions) != 0 and option_check_flag:
+            #     yield missions
+            if len(missions) != 0 and option_check_flag:
+                result_missions_set.add(json.dumps(missions))
+
+        logger.info(result_missions_set)
+        result_missions_list = list(result_missions_set)
+        result_missions_list.sort(key=lambda line: len(line))
+        self._temp_options[var_place][dict_id] = result_missions_list
+        for missions_line in result_missions_list:
+            yield json.loads(missions_line)
+
+    def _merge_option(self, src_option, dest_option, deepcopy=True):
+        """Util function to copy data from src_option to dest_option."""
+        if deepcopy:
+            result_option = {
+                "defined": copy.deepcopy(dest_option.get("defined", list())),
+                "undefined": copy.deepcopy(dest_option.get("undefined", list()))
+            }
+        else:
+            result_option = {
+                "defined": dest_option.get("defined", list()),
+                "undefined": dest_option.get("undefined", list())
+            }
+
+        for defined in src_option.get("defined", list()):
+            if defined not in result_option.get("defined", list()):
+                result_option["defined"].append(defined)
+
+        for undefined in src_option.get("undefined", list()):
+            if undefined not in result_option.get("undefined", list()):
+                result_option["undefined"].append(undefined)
+
+        result_option["option"] = dest_option.get("option", dict())
+        return result_option
+
     def _get_am_value(self, variable, am_pair_var, option_dict):
         """
         Try to get value of one variable.
@@ -782,6 +1000,7 @@ class AutoToolsParser(object):
         logger.info("# Start check value: %s" % variable)
         if variable not in am_pair_var:
             yield [""]
+            return
 
         undefineds = option_dict.get("undefined", list())
         defineds = option_dict.get("defined", list())
@@ -813,175 +1032,72 @@ class AutoToolsParser(object):
                     copy_defineds.append(undefined_line)
                     yield copy_defineds
 
-    def _undefined_builder(self, var_dict, am_pair_var=None, ac_pair_var=None):
-        """
-            When we calling undefined builder we have been complete top level option check.
-            TODO: 将这个函数修改为同时适用于 ac 部分的 variable 构建
-        """
-        first_queue = queue.Queue()
-        second_queue = queue.Queue()
-
-        line = " ".join(var_dict.get("undefined", list()))
-        slices = self._undefined_split(line, am_pair_var)
-        first_queue.put(["",])
-
-        dollar_var_pattern = r"\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)"
-        at_var_pattern = r"\@([a-zA-Z_][a-zA-Z0-9_]*)\@"
-        var_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
-        complete = False
-        level = 0
-        while not complete:
-            q = first_queue if level % 2 == 0 else second_queue
-            next_q = second_queue if level % 2 == 0 else first_queue
-            try:
-                missions = q.get(block=False)
-            except queue.Empty:
-                if level == len(slices) - 1:
-                    complete = True
-                level += 1
-                continue
-
-            slice = slices[level]
-
-            var_match = var_regex.match(slice)
-            if not var_match:
-                missions.append(slice)
-                next_q.put(missions)
-            else:
-                export_var_flag = True if var_match.group(2) is not None else False
-                var_name = var_match.group(2) if export_var_flag else var_match.group(1)
-
-                configure_ac_dict = self.configure_ac_info.get("configure_ac", dict())
-                ac_export_vars = configure_ac_dict.get("export_variables", dict())
-
-                if var_name not in am_pair_var and var_name in ac_export_vars:
-                    # builtin preset variables.
-                    for defined_list in self._get_ac_value(var_name):
-                        value = " ".join(defined_list)
-                        temp_missions = copy.deepcopy(missions)
-                        temp_missions.append(value)
-                        next_q.put(temp_missions)
-                elif var_name in am_pair_var:
-                    for defined_list in self._get_am_value(var_name, am_pair_var, am_pair_var[var_name]):
-                        value = " ".join(defined_list)
-                        temp_missions = copy.deepcopy(missions)
-                        temp_missions.append(value)
-                        next_q.put(temp_missions)
-                else:
-                    # Unknown variable.
-                    value = ""
-                    missions.append(value)
-                    next_q.put(missions)
-
-        result_queue = first_queue if level % 2 == 0 else second_queue
-        while not result_queue.empty():
-            try:
-                result_slices = result_queue.get(block=False)
-                yield "".join(result_slices)
-            except queue.Empty:
-                continue
-
-    def _option_builder(self, var_dict):
-        """
-        Generator to recall option dict, which will search all level option.
-        :param var_dict:                variable store dict
-        :return:
-        """
-        q = queue.Queue()
-
-        # Ignore default N options
-        options = var_dict.get("option", dict())
-        options_key = options.keys()
-        default_prefix = "default_"
-        i = 1
-        defaultN = default_prefix + str(i)
-        if defaultN in options:
-            status = True
-            while status:
-                options_key.pop(defaultN)
-                i += 1
-                defaultN = default_prefix + str(i)
-                status = (defaultN in options)
-
-        new_var_dict = self._merge_option(var_dict, dict())
-        for key in options_key:
-            new_var_dict["option"][key] = options.get(key, dict())
-        missions = [(new_var_dict, 0)]
-        q.put(missions)
-
-        # Start iterating all level option
-        complete = False
-        while not complete:
-            try:
-                missions = q.get(block=False)
-            except queue.Empty:
-                complete = True
-                continue
-
-            option_check_flag = True
-            for i, mission in enumerate(missions):
-                var_dict = mission[0]
-                level = mission[1]
-                if "option" not in mission[0] and True in mission[0]:
-                    # option level
-                    true_missions = missions[:i]
-                    true_opt = mission[0].get(True, dict())
-                    true_missions.append((true_opt, level + 1))
-                    true_missions.extend(missions[i + 1:])
-
-                    false_missions = missions[:i]
-                    false_opt = mission[0].get(False, dict())
-                    false_missions.append((false_opt, level + 1))
-                    false_missions.extend(missions[i + 1:])
-
-                    q.put(true_missions)
-                    q.put(false_missions)
-                    option_check_flag = False
-                    break
-
-                if "option" in mission[0]:
-                    # var_dict level
-                    options = var_dict.get("option", dict())
-                    option_keys = options.keys()
-                    if len(option_keys) != 0:
-                        start_missions = missions[:i]
-                        for option in options:
-                            option_dict = options[option]
-                            start_missions.append((option_dict, level))
-                        start_missions.extend(missions[i + 1:])
-                        q.put(start_missions)
-                        option_check_flag = False
-                        break
-            # Checking return type
-            if len(missions) != 0 and option_check_flag:
-                yield missions
-
-    def _merge_option(self, src_option, dest_option):
-        """Util function to copy data from src_option to dest_option."""
-        result_option = {
-            "defined": copy.deepcopy(dest_option.get("defined", list())),
-            "undefined": copy.deepcopy(dest_option.get("undefined", list()))
-        }
-
-        for defined in src_option.get("defined", list()):
-            if defined not in result_option.get("defined", list()):
-                result_option["defined"].append(defined)
-
-        for undefined in src_option.get("undefined", list()):
-            if undefined not in result_option.get("undefined", list()):
-                result_option["undefined"].append(undefined)
-
-        result_option["option"] = dest_option.get("option", dict())
-        return result_option
-
-    def _get_ac_value(self, variable):
+    def _get_ac_value(self, variable, ac_var_infos=None, option_dict=None):
         """
             Maybe should be a recursion generator.
             To simplify ac_value gain yield times, macros line will be the only concentrated probability.
             TODO: 获取 configure.ac 中的export的变量
             包含了preset的变量，和使用SUBST导出的变量
         """
-        yield []
+        logger.info("# Start check value:%s from configure_ac" % variable)
+        if ac_var_infos is None:
+            ac_infos = self.configure_ac_info.get("configure_ac", dict())
+            ac_var_infos = ac_infos.get("variables", dict())
+            ac_export_var_infos = ac_infos.get("export_variables", dict())
+            # SUBST(variable)  or  preset variable for AM
+            if variable not in ac_export_var_infos or \
+                (variable in preset_output_variables and variable not in ac_var_infos):
+                yield [""]
+                return
+
+        if variable not in ac_var_infos:
+            yield [""]
+            return
+
+        if option_dict is None:
+            option_dict = ac_var_infos.get(variable, dict())
+
+        defineds = option_dict.get("defined", list())
+        options = option_dict.get("option", dict())
+        has_yield = False
+        if len(options) != 0:
+            print(id(option_dict))
+            for final_var_tuple in self._option_builder(option_dict, var_place="AC"):
+                logger.info(final_var_tuple)
+                final_var_dict = self._merge_option(option_dict, dict())
+                for opt, level in final_var_tuple:
+                    final_var_dict = self._merge_option(opt, final_var_dict, False)
+                defineds = final_var_dict.get("defined", list())
+                logger.info("final_var_dict: %s" % final_var_dict)
+
+                # defined with -D will be directly return, don't care about undefined.
+                if re.search(r"\s+-D[a-zA-Z_][a-zA-Z0-9_]*", " " + " ".join(defineds)):
+                    has_yield = True
+                    yield defineds
+                # Local ${} variable has been checking in local variables.
+                # Here we need to check preset_variables and ac_subst variables.
+                for undefined_line in self._undefined_builder(final_var_dict, ac_var_infos, for_ac=True):
+                    if re.search(r"\s+-D[a-zA-Z_][a-zA-Z0-9_]*", " " + undefined_line):
+                        # Only the line with -D will be return
+                        copy_defineds = copy.deepcopy(defineds)
+                        copy_defineds.append(undefined_line)
+                        has_yield = True
+                        yield copy_defineds
+        else:
+            if re.search(r"\s+-D[a-zA-Z_][a-zA-Z0-9_]*", " " + " ".join(defineds)):
+                has_yield = True
+                yield defineds
+
+            for undefined_line in self._undefined_builder(option_dict, ac_var_infos, for_ac=True):
+                if re.search(r"\s+-D[a-zA-Z_][a-zA-Z0-9_]*", " " + undefined_line):
+                    copy_defineds = copy.deepcopy(defineds)
+                    copy_defineds.append(undefined_line)
+                    has_yield = True
+                    yield copy_defineds
+
+        if not has_yield:
+            # With no result, at least return one empty string.
+            yield [""]
 
 
 def unbalanced_quotes(s):
@@ -1027,16 +1143,16 @@ if __name__ == "__main__":
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
     # auto_tools_parser.load_m4_macros()
     # auto_tools_parser.set_configure_ac()
+    # auto_tools_parser.build_ac_export_infos()
     auto_tools_parser.set_makefile_am(make_file_am)
+    auto_tools_parser.load_ac_info_from_json()
+    # auto_tools_parser.load_am_info_from_json()
+
     auto_tools_parser.build_autotools_target()
-    # auto_tools_parser.try_build_target(make_file_am[0])
     auto_tools_parser.try_build_all_am_target()
-
     auto_tools_parser.dump_makefile_am_info()
-
     # auto_tools_parser.dump_m4_info()
-    #
-    # auto_tools_parser.dump_ac_info()
+    auto_tools_parser.dump_ac_info()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

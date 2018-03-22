@@ -766,8 +766,11 @@ def _calling_to_merge(func_name, funcname_tocall, *args):
         TODO: args can be used to expend macros with arguments.
     """
     tocall_function = m4_libs.get(funcname_tocall, dict())
-    if len(tocall_function) == 0:
+    present_function = functions.get(funcname_tocall, dict())
+    if len(tocall_function) == 0 and len(present_function) == 0:
         logger.debug("{} may be a builtin function or loading fail.".format(funcname_tocall))
+    elif len(present_function) != 0:
+        tocall_function = present_function
 
     # Step 1: Merge variables for called function and calling function
     dest_variables = functions[func_name]["variables"]
