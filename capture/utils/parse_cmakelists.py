@@ -11,6 +11,10 @@
 import os
 import re
 import logging
+
+from capture.utils.cmake_command_analyzer import *
+
+
 logger = logging.getLogger("capture")
 
 
@@ -20,19 +24,17 @@ default_module_paths = [
 ]
 
 cmake_field_definitions = {
+    #TODO: function选项的需要去调用解析函数，一般的则采用通用的来做
     # set 还有其他参数，但是我们不需要关注, 要保证 CACHE 去除
     # value_list 可以为0 或 多个， 如果是 0 表示，置空变量， 如果是多个值，则通过 ; 分隔
-    "set": [("key", True), ("value_list", False), ("CACHE", False), ("type", False), ("string", False)],
+    "set": set_analyzer,
     # list的结构有很多种情况
-    "list": [("action", True), ("key", True), ],
-    "include": [("")]
+    "list": list_analyzer,
+    "include": ["string"]
 }
 comment_regex = re.compile(r"#.*?\n(.*)", flags=re.DOTALL)
 pattern_list = map("{}\(\s*(.*?)\s*\)(.*)".format, cmake_field_definitions.keys())
 regex_list = map(lambda pattern: re.compile(pattern, flags=re.DOTALL), pattern_list)
-
-def set_analyzer(match_line):
-    pass
 
 
 class CMakeParser(object):
