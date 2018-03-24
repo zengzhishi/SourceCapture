@@ -246,12 +246,12 @@ class AutoToolsParser(object):
             c_case = None
             cxx_case = None
             if "c_files" in target and len(target.get("c_files", list())) != 0:
-                                                                           c_files = target.get("c_files", list())
-                                                                           idx = random.randint(0, len(c_files))
-                                                                           c_case = os.path.join(path, c_files[idx])
+                c_files = target.get("c_files", list())
+                idx = random.randint(0, len(c_files) - 1)
+                c_case = os.path.join(path, c_files[idx])
             if "cxx_files" in target and len(target.get("cxx_files", list())) != 0:
                 cxx_files = target.get("cxx_files", list())
-                idx = random.randint(0, len(cxx_files))
+                idx = random.randint(0, len(cxx_files) - 1)
                 cxx_case = os.path.join(path, cxx_files[idx])
 
             # Try build
@@ -936,16 +936,34 @@ class AutoToolsParser(object):
                     break
 
                 if "option" in var_dict and len(var_dict.get("option", dict())) != 0:
-                    # var_dict level
                     options = var_dict.get("option", dict())
+                    # filter rule 1: More than level 3, we will stop checking.
+                    if level > 1:
+                        var_dict["option"] = dict()
+
+                    # filter rule 2: More than 10 will use default value. We will use false value.
+                    use_top_options = False
+                    if len(options) > 10:
+                        use_top_options = True
+
                     # need to contain itself, but release option field
                     # TODO: 添加一个逻辑，当检查到没有-D 和 -I的时候，就不保存本层的数据, 减小层次
+                    # match_dest_flags = False
+                    # for defined in var_dict.get("defined", list()):
+                    #     if re.match("-[DI]", defined):
+                    #         match_dest_flags = True
+                    # if len(var_dict["undefined"]) == 0 and not match_dest_flags:
                     start_missions = missions[:i]
                     var_dict["option"] = {}
                     start_missions.append((var_dict, level))
                     for option in options:
                         option_dict = options[option]
-                        start_missions.append((option_dict, level))
+                        is_bool = True if True in option_dict else False
+                        if use_top_options:
+                            option_dict = option_dict[False if is_bool else "false"]
+                            option_dict["option"] = dict()
+                        else:
+                            start_missions.append((option_dict, level))
                     start_missions.extend(missions[i + 1:])
                     q.put(start_missions)
                     option_check_flag = False
@@ -1141,11 +1159,11 @@ if __name__ == "__main__":
         make_file_am = [am_path,]
 
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
-    # auto_tools_parser.load_m4_macros()
-    # auto_tools_parser.set_configure_ac()
-    # auto_tools_parser.build_ac_export_infos()
+    auto_tools_parser.load_m4_macros()
+    auto_tools_parser.set_configure_ac()
+    auto_tools_parser.build_ac_export_infos()
     auto_tools_parser.set_makefile_am(make_file_am)
-    auto_tools_parser.load_ac_info_from_json()
+    # auto_tools_parser.load_ac_info_from_json()
     # auto_tools_parser.load_am_info_from_json()
 
     auto_tools_parser.build_autotools_target()
