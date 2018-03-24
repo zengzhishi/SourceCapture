@@ -659,15 +659,11 @@ class AutoToolsAnalyzer(Analyzer):
         undefined_cxx_info["compiler_type"] = "CXX"
         undefined_cxx_info["flags"] = DEFAULT_CXX_FLAGS
 
+        # Add config.h path for all info list.
+        for info_list in result:
+            info_list["includes"].append(auto_tools_parser.ac_headers)
+
         result.append(undefined_c_info)
         result.append(undefined_cxx_info)
-        # autotools_project_info = {
-        #     "sub_path": paths,
-        #     "sources_infos": result,
-        #     "includes": files_h,
-        #     "files_count": len(files_s)
-        # }
-        # print(autotools_project_info)
-        # return autotools_project_info
         return result, files_h, len(files_s)
 

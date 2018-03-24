@@ -514,11 +514,6 @@ class CaptureBuilder(object):
                                                                     self.__build_path)
 
             source_infos, include_files, files_count = autotools_analyzer.get_project_infos_autotools()
-            print(source_infos)
-            # autotools_project_infos = autotools_analyzer.get_project_infos_autotools()
-            # source_infos = autotools_project_infos.get("sources_infos", list())
-            # include_files = autotools_project_infos.get("includes", list())
-            # files_count = autotools_project_infos.get("files_count", 0)
 
         elif self.__build_type == "make":
             # scan project files

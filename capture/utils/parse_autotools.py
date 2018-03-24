@@ -187,6 +187,8 @@ class AutoToolsParser(object):
         self.configure_ac_info = {}
         self.m4_macros_info = {}
         self.makefile_am_info = {}
+        self.config_h = {}
+        self.ac_headers = ""
 
     def __del__(self):
         if self._fhandle_configure_ac:
@@ -205,6 +207,7 @@ class AutoToolsParser(object):
         self.load_m4_macros()
         self.set_configure_ac()
         self.build_ac_export_infos()
+        self.dump_config_h()
         self.set_makefile_am(makefile_ams)
         self.build_autotools_target()
         self.try_build_all_am_target(c_compiler=c_compiler, cxx_compiler=cxx_compiler)
@@ -257,6 +260,27 @@ class AutoToolsParser(object):
             dump_data(self.configure_ac_info, output_path)
         else:
             dump_data(self.configure_ac_info, os.path.join(self._output_path, "configure_ac_info.json"))
+
+    def dump_config_h(self, output_path=None):
+        if output_path is None:
+            output_path = self._output_path
+        if len(self.ac_headers) != 0:
+            ac_headers = os.path.split(self.ac_headers)[-1]
+        else:
+            ac_headers = "config.h"
+        output_filepath = os.path.join(output_path, ac_headers)
+        with open(os.path.join(output_path, "headers.json"), "w") as fout:
+            json.dump(self.config_h, fout, indent=4)
+
+        self.ac_headers = os.path.join(output_path, output_filepath)
+        with open(self.ac_headers, "w") as config_out:
+            for macros_name, define in self.config_h.items():
+                if len(define.get("option", list())) != 0:
+                    continue
+                desc_line = "/* {} */\n".format(define.get("description", ""))
+                define_line = "#define {} {}\n".format(macros_name, define.get("value", "1"))
+                config_out.write(desc_line + define_line)
+        logger.info("Generating config.h complete.")
 
     def load_ac_info_from_json(self):
         with open(os.path.join(self._output_path, "configure_ac_info.json"), "r") as fin:
@@ -628,6 +652,8 @@ class AutoToolsParser(object):
                                        allow_calling=True)
         except StopIteration:
             self.configure_ac_info = m4_macros_analysis.functions
+            self.config_h = m4_macros_analysis.config_h
+            self.ac_headers = m4_macros_analysis.ac_headers
             logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
 
     def _preload_m4_config(self, configure_ac_filepath):
@@ -847,7 +873,6 @@ class AutoToolsParser(object):
             try:
                 missions = q.get(block=False)
             except queue.Empty:
-                logger.info("level: {}, len: {}".format(level, len(slices)))
                 if level == len(slices) - 1:
                     complete = True
                 level += 1
@@ -866,7 +891,6 @@ class AutoToolsParser(object):
                 configure_ac_dict = self.configure_ac_info.get("configure_ac", dict())
                 ac_export_vars = configure_ac_dict.get("export_variables", dict())
 
-                print("++++ Check var: %s" % var_name)
                 if var_name in am_pair_var and for_ac:
                     for defined_list in self._get_ac_value(var_name, am_pair_var,
                                                            am_pair_var.get(var_name, dict())):
@@ -878,7 +902,6 @@ class AutoToolsParser(object):
                 if not for_ac and var_name not in am_pair_var and var_name in ac_export_vars:
                     # builtin preset variables.
                     for defined_list in self._get_ac_value(var_name):
-                        print("call ac: %s" % defined_list)
                         value = " ".join(defined_list)
                         value = " " + value if with_blank else value
                         temp_missions = copy.deepcopy(missions)
@@ -920,12 +943,12 @@ class AutoToolsParser(object):
 
         dict_id = id(var_dict)
         if dict_id in var_options:
-            logger.info("### Found")
+            logger.debug("### Found %s" % dict_id)
             result_missions_list = var_options.get(dict_id, [""])
             for missions_line in result_missions_list:
                 yield json.loads(missions_line)
             return
-        logger.info("### Not Found")
+        logger.debug("### Not Found %s" % dict_id)
 
         q = queue.Queue()
 
@@ -947,7 +970,7 @@ class AutoToolsParser(object):
         for key in options_key:
             new_var_dict["option"][key] = options.get(key, dict())
         missions = [(new_var_dict, 0)]
-        logger.info("$# start missions: %s" % missions)
+        logger.debug("$# start missions: %s" % missions)
         q.put(missions)
 
         # Start iterating all level option
@@ -1022,7 +1045,6 @@ class AutoToolsParser(object):
             if len(missions) != 0 and option_check_flag:
                 result_missions_set.add(json.dumps(missions))
 
-        logger.info(result_missions_set)
         result_missions_list = list(result_missions_set)
         result_missions_list.sort(key=lambda line: len(line))
         self._temp_options[var_place][dict_id] = result_missions_list
@@ -1127,9 +1149,7 @@ class AutoToolsParser(object):
         options = option_dict.get("option", dict())
         has_yield = False
         if len(options) != 0:
-            print(id(option_dict))
             for final_var_tuple in self._option_builder(option_dict, var_place="AC"):
-                logger.info(final_var_tuple)
                 final_var_dict = self._merge_option(option_dict, dict())
                 for opt, level in final_var_tuple:
                     final_var_dict = self._merge_option(opt, final_var_dict, False)

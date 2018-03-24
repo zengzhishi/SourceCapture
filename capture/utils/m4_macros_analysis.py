@@ -23,6 +23,7 @@ if __name__ == "__main__":
     import parse_logger
     parse_logger.addFileHandler("./capture.log", "capture")
 
+
 logger = logging.getLogger("capture")
 
 reserved = {
@@ -234,10 +235,14 @@ m4_macros_map = {
     "AC_MSG_RESULT": ["string", True],
     "AC_MSG_ERROR": ["string", True],
     "AC_SUBST": ["ID_VAR", True, "value", False],
+    "AC_CONFIG_HEADERS": ["HEADERS", True],
     "AM_CONDITIONAL": ["ID_ENV", True, "test", False],
     "AC_MSG_WARN": ["string", True],
     "AC_HELP_STRING": ["string", True, "string", True],
     "AC_MSG_NOTICE": ["string", True],
+
+    "AC_DEFINE_UNQUOTED": ["MACROS", True, "macros_value", True, "string", True],
+    "AC_DEFINE": ["MACROS", True, "macros_value", True, "string", True],
 }
 
 left = ['LPAREN', 'LSPAREN', 'LBRACES',]
@@ -249,6 +254,10 @@ options = []
 reverses = []
 functions = {}
 m4_libs = {}
+config_h = {}
+to_config = []
+ac_headers = ""
+
 
 has_macros = False
 
@@ -1142,6 +1151,18 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
             except StopIteration:
                 raise ParserError
 
+        global to_config
+        logger.debug(to_config)
+        if len(to_config) == 2:
+            macros_name = to_config[0]
+            config_h[macros_name] = {
+                "value": to_config[1],
+                "description": " ".join(value),
+                "option": copy.deepcopy(options),
+                "reverse": copy.deepcopy(reverses)
+            }
+            to_config.clear()
+
     elif analysis_type == "test":
         logger.debug("## Start test analysis")
         generator.seek(generator.index - 1)
@@ -1179,6 +1200,64 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
         }
         functions[func_name]["need_assign_var"].append(token.value)
         token = generator.next()
+
+    elif analysis_type == "macros_value":
+        value = []
+        quote_count = 0
+        while token.type not in ["RSPAREN", "RPAREN", "COMMA"] or quote_count != 0:
+            value.append(token.value)
+            if token.type in left:
+                quote_count += 1
+            elif token.type in right:
+                quote_count -= 1
+
+            try:
+                token = generator.next()
+            except StopIteration:
+                raise ParserError
+
+        str_value = " ".join(value)
+        if re.search("\$", str_value):
+            to_config.append("")
+        else:
+            to_config.append(str_value)
+
+    elif analysis_type == "MACROS":
+        macros_name = token.value
+        logger.debug("## Start MACROS analysis, macros name: %s" % macros_name)
+        to_config.clear()
+        try:
+            token = generator.next()
+            if token.type in ["RSPAREN", "COMMA"]:
+                to_config.append(macros_name)
+            else:
+                quote_count = 0
+                while token.type not in ["RSPAREN", "COMMA"] or quote_count != 0:
+                    if token.type in left:
+                        quote_count += 1
+                    elif token.type in right:
+                        quote_count -= 1
+                    token = generator.next()
+        except StopIteration:
+            raise ParserError
+
+    elif analysis_type == "HEADERS":
+        value = []
+        global ac_headers
+        quote_count = 0
+        while token.type not in ["RSPAREN", "RPAREN"] or quote_count != 0:
+            value.append(token.value)
+            if token.type in left:
+                quote_count += 1
+            elif token.type in right:
+                quote_count -= 1
+
+            try:
+                token = generator.next()
+            except StopIteration:
+                raise ParserError
+        str_value = "".join(value)
+        ac_headers = str_value
 
     if token.type in ends:
         [generator.seek(generator.index - 1) for _ in range(roll_back_times)]
