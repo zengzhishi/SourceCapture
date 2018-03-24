@@ -175,7 +175,7 @@ class M4Lexer(object):
         return t
 
     def t_error(self, t):
-        print("Illegal character '%s', pos:(%d, %d)" % (t.value[0], t.lineno, t.lexpos))
+        logger.debug("Illegal character '%s', pos:(%d, %d)" % (t.value[0], t.lineno, t.lexpos))
         t.lexer.skip(1)
 
     # Build the lexer
@@ -330,7 +330,7 @@ def _args_check_bool_expresion(generator, ends=["RPAREN", "RSPAREN"]):
     try:
         token = generator.next()
         if token.type != "test" and token.type != "LSPAREN":
-            logger.warning("This is a nonstandard expression")
+            logger.debug("This is a nonstandard expression")
         option_list.append(token.value)
 
         quote_index = -1
@@ -381,13 +381,12 @@ def _check_bool_expresion(generator, ends=["then",]):
         elif token.type == "LSPAREN":
             ends = ["RSPAREN",]
         else:
-            logger.warning("This is a nonstandard expression")
+            logger.debug("This is a nonstandard expression")
         option_list.append(token.value)
 
         quote_index = -1
         quote_counts = 0
         while token.type not in ends and quote_counts >= 0:
-            print(token)
             if token.type == "SEMICOLON":
                 pass
             elif token.type == "DOUBLE_QUOTE":
@@ -493,7 +492,7 @@ def _check_sh_case(generator, level, func_name=None, allow_calling=False):
 
             if token.type == "esac":
                 end_flags = True
-        print("### End of case calling.")
+        logger.debug("### End of case calling.")
     except StopIteration:
         raise ParserError
 
@@ -877,7 +876,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
     :return:
     """
     if func_name is None:
-        logger.warning("Functions can't be None type.")
+        logger.debug("Functions can't be None type.")
         return
 
     logger.debug("# calling analysis with type: " + analysis_type +
@@ -887,7 +886,6 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
     roll_back_times = 0
     try:
         start_tokens = [generator.next() for _ in range(2)]
-        logger.info(start_tokens)
     except StopIteration:
         raise ParserError
     if start_tokens[0].type == "LSPAREN" and start_tokens[1].type == "LSPAREN":
@@ -909,7 +907,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
         # For such informal case, the end flags need to change to COMMA or RPAREN
         roll_back_times += 1
         ends = ["COMMA", "RPAREN"]
-        logger.warning("Set ends: %s" % ends)
+        logger.debug("Set ends: %s" % ends)
 
     if start_tokens[0].type == "LSPAREN":
         generator.seek(generator.index - 1)
@@ -1008,7 +1006,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                         value = _cache_check_assign(generator, var, lineno, next_token.value)
                         if value is not None:
                             # TODO: The assignment line actually should be saved.
-                            logger.info("ASSIGN value: %s=%s" % (var, value))
+                            logger.debug("ASSIGN value: %s=%s" % (var, value))
                             line = var + "=" + value
                             variables = functions[func_name]["variables"]
                             macros_line_analyze(line, variables, generator)
@@ -1316,7 +1314,6 @@ class CacheGenerator(object):
         data = self._caches[self._index - 1]
         self._index += 1
         self._set_max()
-        logger.debug(data)
         return data
 
     def last(self):

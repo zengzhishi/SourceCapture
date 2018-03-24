@@ -19,17 +19,17 @@ import copy
 import random
 import json
 
+import logging
 if __name__ == "__main__":
     import m4_macros_analysis
     import capture_util
+    sys.path.append(os.path.join("..", "conf"))
+    import parse_logger
+    parse_logger.addFileHandler("./capture.log", "capture")
 else:
     import capture.utils.m4_macros_analysis as m4_macros_analysis
     import capture.utils.capture_util as capture_util
 
-import logging
-sys.path.append(os.path.join("..", "conf"))
-import parse_logger
-parse_logger.addFileHandler("./capture.log", "capture")
 logger = logging.getLogger("capture")
 
 
@@ -86,6 +86,15 @@ preset_output_variables = [
     "LIBS",
     "LDFLAGS",
 ]
+
+
+def check_configure_scan(project_path):
+    """Checking configure scan files"""
+    for file_name in CONFIGURE_AC_NAMES:
+        file_path = os.path.join(project_path, file_name)
+        if os.path.exists(file_path):
+            return file_path
+    return None
 
 
 def _check_undefined(slices):
@@ -191,6 +200,46 @@ class AutoToolsParser(object):
     def project_path(self):
         return self._project_path
 
+    def get_project_analysis_result(self, makefile_ams, c_compiler="cc", cxx_compiler="g++", save_infos=True):
+        logger.info("Makefile am: %s" % makefile_ams)
+        self.load_m4_macros()
+        self.set_configure_ac()
+        self.build_ac_export_infos()
+        self.set_makefile_am(makefile_ams)
+        self.build_autotools_target()
+        self.try_build_all_am_target(c_compiler=c_compiler, cxx_compiler=cxx_compiler)
+        if save_infos:
+            self.dump_m4_info()
+            self.dump_ac_info()
+            self.dump_makefile_am_info()
+
+        analysis_autotools_result = []
+        for makefile_am in makefile_ams:
+            am_infos = self.makefile_am_info.get(makefile_am, dict())
+            if len(am_infos) == 0: continue
+            am_targets = am_infos.get("target", dict())
+            if len(am_targets) == 0: continue
+
+            for target_key, target in am_targets.items():
+                for type in ["C", "CXX"]:
+                    flag_name = "c_flags" if type == "C" else "cxx_flags"
+                    file_name = "c_files" if type == "C" else "cxx_files"
+                    type_flags = target.get(flag_name, dict())
+                    type_files = target.get(file_name, list())
+                    type_target = {
+                        "compiler_type": type,
+                        "source_files": type_files,
+                        "exec_directory": self._project_path,
+                        "flags": type_flags.get("flags", list()),
+                        "definitions": type_flags.get("definitions", list()),
+                        "includes": type_flags.get("includes", list()),
+                        # Maybe will use them.
+                        "custom_flags": [],
+                        "custom_definitions": [],
+                    }
+                    analysis_autotools_result.append(type_target)
+        return analysis_autotools_result
+
     def dump_makefile_am_info(self, output_path=None):
         if output_path:
             dump_data(self.makefile_am_info, output_path)
@@ -240,9 +289,10 @@ class AutoToolsParser(object):
                                        sub_files)
                     cpp_files = filter(lambda file_name: True if file_name.split(".")[-1] in \
                                                                  ["cxx", "cpp", "cc"] else False, sub_files)
-                    target["c_files"] = list(c_files)
-                    target["cxx_files"] = list(cpp_files)
+                    target["c_files"] = list(map(lambda file: os.path.join(path, file), c_files))
+                    target["cxx_files"] = list(map(lambda file: os.path.join(path, file), cpp_files))
             # Get test case
+            logger.info("#$# Get case from files.")
             c_case = None
             cxx_case = None
             if "c_files" in target and len(target.get("c_files", list())) != 0:
@@ -272,6 +322,7 @@ class AutoToolsParser(object):
                 cxx_compiler_status = False
                 sorted_cppsorted_flags = sort_flags_line(cppsorted_flags)
                 for lines in sorted_cppsorted_flags:
+                    logger.info("1. %s" % lines)
                     default_includes, default_macros, default_flags = format_flags(lines, path)
                     # Autotools all add
                     default_macros.append("HAVE_CONFIG_H")
@@ -289,6 +340,7 @@ class AutoToolsParser(object):
                         compiler = c_compiler if flag_name == "CFLAGS" else cxx_compiler
                         sorted_flags = sort_flags_line(flags_line)
                         for line in sorted_flags:
+                            logger.info("2. %s" % line)
                             includes, macros, flags = format_flags(line, path)
                             includes.extend(default_includes)
                             macros.extend(default_macros)
@@ -300,6 +352,7 @@ class AutoToolsParser(object):
                                 compiler, case, os.path.join(self._build_path, c_case + ".o"),
                                 include_line, macros_line, flags_line
                             )
+                            logger.info(cmd)
                             (returncode, out, err) = capture_util.subproces_calling(cmd, path)
                             if returncode == 0:
                                 logger.info("Try compile for target: %s success." % target_key)
@@ -538,7 +591,7 @@ class AutoToolsParser(object):
     def set_configure_ac(self):
         """Loading configure.ac file info"""
         if self._fhandle_configure_ac is None:
-            config_file_name = self._check_configure_scan()
+            config_file_name = check_configure_scan(self._project_path)
             if config_file_name:
                 self._fhandle_configure_ac = open(config_file_name, "r")
             else:
@@ -577,14 +630,6 @@ class AutoToolsParser(object):
             self.configure_ac_info = m4_macros_analysis.functions
             logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
 
-    def _check_configure_scan(self):
-        """Checking configure scan files"""
-        for file_name in CONFIGURE_AC_NAMES:
-            file_path = os.path.join(self._project_path, file_name)
-            if os.path.exists(file_path):
-                return file_path
-        return None
-
     def _preload_m4_config(self, configure_ac_filepath):
         """Use shell util to get specific line from configure_ac file, here we search the MACROS dir"""
         cmd = "fgrep \"{}\" {}".format("AC_CONFIG_MACRO_DIR", configure_ac_filepath)
@@ -605,7 +650,7 @@ class AutoToolsParser(object):
     def _get_m4_folder(self):
         """Checking m4 folder path from configure_ac file"""
         if "macros_dir" not in self.configure_ac_info:
-            config_file_name = self._check_configure_scan()
+            config_file_name = check_configure_scan(self._project_path)
             if config_file_name:
                 self._fhandle_configure_ac = open(config_file_name, "r")
                 self.configure_ac_info["macros_dir"] = self._preload_m4_config(config_file_name)
@@ -677,11 +722,14 @@ class AutoToolsParser(object):
         """Using ac_infos and am_infos to build up the final target flags."""
         # Step 1. Check out whether is a root_path makefile.am
         root_path_makefile = os.path.join(self._project_path, "Makefile.am")
+        logger.info("root Makefile.am: %s" % root_path_makefile)
         if root_path_makefile in self.makefile_am_info:
             makefile_am = self.makefile_am_info.get(root_path_makefile, dict())
+            variables = makefile_am.get("variables", dict())
             # step 1.1. check subdir
-            subdirs = makefile_am["variables"].get("SUBDIRS", list())
-            sub_makefile_ams = map(lambda subpath: os.path.join(self._project_path, subpath), subdirs)
+            subdirs = variables.get("SUBDIRS", list())
+            sub_makefile_ams = map(lambda subpath: os.path.join(self._project_path, subpath, "Makefile.am"),
+                                   subdirs.get("defined", list()))
         else:
             sub_makefile_ams = self.makefile_am_info.keys()
 
@@ -1152,25 +1200,33 @@ if __name__ == "__main__":
 
     if am_path is None:
         make_file_am = [
-            "/home/zengzhishi/pinpoint-demo/curl-master/src/Makefile.am",
-            "/home/zengzhishi/pinpoint-demo/curl-master/lib/Makefile.am",
+            "/home/zengzhishi/pinpoint-demo/curl/src/Makefile.am",
+            "/home/zengzhishi/pinpoint-demo/curl/lib/Makefile.am",
+            "./include/curl/Makefile.am",
+            "./include/Makefile.am",
+            "./Makefile.am",
         ]
     else:
         make_file_am = [am_path,]
 
+    for i, makefile in enumerate(make_file_am):
+        if not os.path.isabs(makefile):
+            make_file_am[i] = os.path.join(project_path, makefile)
+
     auto_tools_parser = AutoToolsParser(project_path, os.path.join("..", "..", "result"))
-    auto_tools_parser.load_m4_macros()
-    auto_tools_parser.set_configure_ac()
-    auto_tools_parser.build_ac_export_infos()
-    auto_tools_parser.set_makefile_am(make_file_am)
+    auto_tools_parser.get_project_analysis_result(make_file_am)
+    # auto_tools_parser.load_m4_macros()
+    # auto_tools_parser.set_configure_ac()
+    # auto_tools_parser.build_ac_export_infos()
     # auto_tools_parser.load_ac_info_from_json()
+    # auto_tools_parser.set_makefile_am(make_file_am)
     # auto_tools_parser.load_am_info_from_json()
 
-    auto_tools_parser.build_autotools_target()
-    auto_tools_parser.try_build_all_am_target()
-    auto_tools_parser.dump_makefile_am_info()
+    # auto_tools_parser.build_autotools_target()
+    # auto_tools_parser.try_build_all_am_target()
+    # auto_tools_parser.dump_makefile_am_info()
     # auto_tools_parser.dump_m4_info()
-    auto_tools_parser.dump_ac_info()
+    # auto_tools_parser.dump_ac_info()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

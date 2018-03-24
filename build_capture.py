@@ -505,6 +505,21 @@ class CaptureBuilder(object):
                                                             self.__output_path, self.__prefers, self.__build_path)
             source_infos, include_files, files_count = cmake_analyzer.get_project_infos()
 
+        elif self.__build_type == "autotools":
+            if not self.__build_path:
+                self.__build_path = self.__root_path
+
+            autotools_analyzer = source_detective.AutoToolsAnalyzer(self.__root_path,
+                                                                    self.__output_path, self.__prefers,
+                                                                    self.__build_path)
+
+            source_infos, include_files, files_count = autotools_analyzer.get_project_infos_autotools()
+            print(source_infos)
+            # autotools_project_infos = autotools_analyzer.get_project_infos_autotools()
+            # source_infos = autotools_project_infos.get("sources_infos", list())
+            # include_files = autotools_project_infos.get("includes", list())
+            # files_count = autotools_project_infos.get("files_count", 0)
+
         elif self.__build_type == "make":
             # scan project files
             make_analyzer = source_detective.MakeAnalyzer(self.__root_path,
@@ -576,8 +591,8 @@ class CaptureBuilder(object):
                 return
 
             # checking & building autotools
-            logger.info("Building cmake fail; Checking and trying to build autotools environment.")
-            status, build_path = source_detective.using_autotools(self.__root_path, self.__output_path)
+            logger.info("Building cmake fail; Checking and trying to build autotools configure environment.")
+            status, build_path = source_detective.using_configure(self.__root_path, self.__output_path)
             if status:
                 self.__build_path = build_path
                 self.__build_type = "make"
@@ -585,12 +600,20 @@ class CaptureBuilder(object):
                 return
 
             # checking & building Makefile
-            logger.info("Building autotools fail; Checking Makefile.")
+            logger.info("Building configure fail; Checking Makefile.")
             status, build_path = source_detective.using_make(self.__root_path)
             if status:
                 self.__build_path = self.__root_path
                 self.__build_type = "make"
                 logger.info("Makefile exist!")
+                return
+
+            logger.info("Building Makefile fail; Checking autotools ac, am and m4 files.")
+            status, build_path = source_detective.using_autotools(self.__root_path)
+            if status:
+                self.__build_path = self.__root_path
+                self.__build_type = "autotools"
+                logger.info("Autotools configure.ac exist!")
                 return
 
             # checking & building scons
@@ -698,7 +721,7 @@ def main():
 
     parser.add_argument("-t", "--build_type",
                         nargs="?",
-                        choices=["make", "cmake", "scons", "other"],
+                        choices=["make", "cmake", "autotools", "scons", "other"],
                         default="other",
                         help="The building type of project you choose.")
 
@@ -712,7 +735,7 @@ def main():
     parser.add_argument("--generate_bitcode", action='store_true',
                         help="Whether generate bitcode file.")
 
-    parser.add_argument("--update_all", action='store_true',
+    parser.add_argument("--update-all", "--update_all", action='store_true',
                         help="Whether update all.")
 
     parser.add_argument("--extra_build_args", default="",
@@ -768,7 +791,7 @@ def main():
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # If using such build type, the last two source_infos are default items, we default not building them.
-    if capture_builder.build_type in ["cmake", "make", "scons"]:
+    if capture_builder.build_type in ["cmake", "make", "scons", "autotools"]:
         result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)

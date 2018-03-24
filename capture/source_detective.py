@@ -5,11 +5,13 @@ import os
 import shutil
 import subprocess
 import queue
+import copy
 import configparser
 
 import capture.utils.parse_cmake as parse_cmake
 import capture.utils.parse_make as parse_make
 import capture.utils.parse_scons as parse_scons
+import capture.utils.parse_autotools as parse_autotools
 
 import capture.utils.capture_util as capture_util
 
@@ -134,8 +136,8 @@ def set_default(infos):
     return
 
 
-# autotools project
-def using_autotools(path, output_path, configure_args=""):
+# autotools project with configure
+def using_configure(path, output_path, configure_args=""):
     filename = os.path.join(path, "configure")
     if not os.path.exists(filename):
         return False, None
@@ -153,6 +155,13 @@ def using_autotools(path, output_path, configure_args=""):
     if returncode == 0:
         return True, build_folder_path
 
+    return False, None
+
+
+def using_autotools(path):
+    configure_ac = parse_autotools.check_configure_scan(path)
+    if configure_ac is not None:
+        return True, path
     return False, None
 
 
@@ -613,12 +622,52 @@ class AutoToolsAnalyzer(Analyzer):
                     elif suffix in include_file_suffix:
                         files_h.append(os.path.join(folder, file_path))
                     elif suffix == "am":
+                        # Saving Makefile.am path
                         files_am.append(os.path.join(folder, file_path))
 
-        autotools_project_info = {
-            "sub_path": paths,
-            "sources": files_s,
-            "includes": files_h,
+        auto_tools_parser = parse_autotools.AutoToolsParser(self._project_path, self._output_path)
+        result = auto_tools_parser.get_project_analysis_result(files_am)
+
+        defined_file_set = set()
+        for am_info in result:
+            for file in am_info.get("source_files", list()):
+                defined_file_set.add(file)
+
+        undefined_c_files = []
+        undefined_cxx_files = []
+        for file in files_s:
+            if file not in defined_file_set:
+                slice = file.split('.')
+                suffix = slice[-1]
+                if len(slice) > 1 and suffix in c_file_suffix:
+                    undefined_c_files.append(file)
+                elif len(slice) > 1 and suffix in cxx_file_suffix:
+                    undefined_cxx_files.append(file)
+
+        undefined_c_info = {
+            "source_files": undefined_c_files,
+            "flags": [],
+            "definitions": [],
+            "includes": paths,
+            "exec_directory": self._project_path,
+            "compiler_type": "C",
+            "custom_flags": [],
+            "custom_definitions": [],
         }
-        return paths, files_s, files_h
+        undefined_cxx_info = copy.deepcopy(undefined_c_info)
+        undefined_cxx_info["source_files"] = undefined_cxx_files
+        undefined_cxx_info["compiler_type"] = "CXX"
+        undefined_cxx_info["flags"] = DEFAULT_CXX_FLAGS
+
+        result.append(undefined_c_info)
+        result.append(undefined_cxx_info)
+        # autotools_project_info = {
+        #     "sub_path": paths,
+        #     "sources_infos": result,
+        #     "includes": files_h,
+        #     "files_count": len(files_s)
+        # }
+        # print(autotools_project_info)
+        # return autotools_project_info
+        return result, files_h, len(files_s)
 
