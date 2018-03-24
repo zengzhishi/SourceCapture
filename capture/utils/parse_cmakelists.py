@@ -9,6 +9,7 @@
     @Note: This parser is used to parse original CMakeLists.txt, and build up compile commands flags.
 """
 import os
+import re
 import logging
 logger = logging.getLogger("capture")
 
@@ -18,12 +19,29 @@ default_module_paths = [
     "cmake"
 ]
 
+cmake_field_definitions = {
+    # set 还有其他参数，但是我们不需要关注, 要保证 CACHE 去除
+    # value_list 可以为0 或 多个， 如果是 0 表示，置空变量， 如果是多个值，则通过 ; 分隔
+    "set": [("key", True), ("value_list", False), ("CACHE", False), ("type", False), ("string", False)],
+    # list的结构有很多种情况
+    "list": [("action", True), ("key", True), ],
+    "include": [("")]
+}
+comment_regex = re.compile(r"#.*?\n(.*)", flags=re.DOTALL)
+pattern_list = map("{}\(\s*(.*?)\s*\)(.*)".format, cmake_field_definitions.keys())
+regex_list = map(lambda pattern: re.compile(pattern, flags=re.DOTALL), pattern_list)
+
+def set_analyzer(match_line):
+    pass
+
 
 class CMakeParser(object):
     def __init__(self, project_path, output_path):
         self._project_path = project_path
         self._output_path = output_path
         self._cmake_module_path = [os.path.join(self._project_path, folder) for folder in default_module_paths]
+
+        self._cmake_infos = {}
 
     def cmake_module_set(self, module_name, cmake_module_path=None):
         """Loading CMake modules from cmake module"""
@@ -46,7 +64,6 @@ class CMakeParser(object):
             return False
         cmake_fin = open(cmake_list_path, "r")
         data = cmake_fin.read()
-
 
 
 
