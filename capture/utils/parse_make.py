@@ -235,15 +235,6 @@ def unbalanced_quotes(s):
     return is_half_quote
 
 
-def strip_quotes(s):
-    if s[0] == "'" and s[-1] == "'":
-        return s[1:-1]
-    elif s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    else:
-        return s
-
-
 def excute_quote_code(s, build_dir):
     s_regax = re.match("`(.*)`(.*)", s)
     excute_cmd = s_regax.group(1)
@@ -350,7 +341,7 @@ def parse_flags(build_log_in, build_dir,
             # make -n output command may have a string "..." as argument, there can insert some flags.
             if word[0] != '-' or not flags_whitelist.match(word):
                 # phony target
-                word_strip_quotes = strip_quotes(word)
+                word_strip_quotes = capture_util.strip_quotes(word)
                 if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
                     quetos_words = split_cmd_line(word_strip_quotes)
                     if len(quetos_words) > 1:

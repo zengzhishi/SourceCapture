@@ -97,27 +97,6 @@ def check_configure_scan(project_path):
     return None
 
 
-def _check_undefined(slices):
-    for slice in slices:
-        if re.search(r"\$\(?[a-zA-Z_][a-zA-Z0-9_]*\)?", slice) or \
-                re.search(r"\@[a-zA-Z_][a-zA-Z0-9_]\@", slice):
-            return True
-    return False
-
-
-def split_line(line):
-    # Pass 1: split line using whitespace
-    words = line.strip().split()
-    # Pass 2: merge words so that the no. of quotes is balanced
-    res = []
-    for w in words:
-        if len(res) > 0 and unbalanced_quotes(res[-1]):
-            res[-1] += " " + w
-        else:
-            res.append(w)
-    return res
-
-
 def dump_data(json_dict, output_path):
     with open(output_path, "w") as fout:
         json.dump(json_dict, fout, indent=4)
@@ -136,7 +115,7 @@ def sort_flags_line(flags, reverse=False):
 
 
 def format_flags(line, path):
-    words = split_line(line)
+    words = capture_util.split_line(line)
     includes = []
     macros = []
     flags = []
@@ -484,7 +463,7 @@ class AutoToolsParser(object):
                         "option": {}
                     }
 
-                words = split_line(value)
+                words = capture_util.split_line(value)
 
                 present_option_dict = self._get_option_level_dict(am_pair_var[key], options, is_in_reverse,
                                                                   True if assig_match else False)
@@ -498,16 +477,16 @@ class AutoToolsParser(object):
                     if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
                         continue
 
-                    slices = self._undefined_split(temp, am_pair_var)
+                    slices = capture_util.undefined_split(temp, am_pair_var)
 
                     transfer_word = "".join(slices)
                     if m4_macros_analysis.check_undefined(slices, with_ac_var=True):
                         if m4_macros_analysis.check_undefined_self(slices, key):
-                            present_option_dict["is_replace"] = False
                             # The empty assignment string, causing no change for variable.
                             if len(slices) == 1:
-                                temp = ""
-                                continue
+                                present_option_dict["is_replace"] = False
+                            temp = ""
+                            continue
                         present_option_dict["undefined"].append(transfer_word)
                     else:
                         present_option_dict["defined"].append(transfer_word)
@@ -521,56 +500,6 @@ class AutoToolsParser(object):
                 folder = os.path.sep.join(fhandle_am.name.split(os.path.sep)[:-1])
                 include_path = os.path.join(folder, include_match.group(1))
                 self._loading_include(am_pair_var, include_path, options, is_in_reverse)
-
-    def _undefined_split(self, line, info_dict=None):
-        """
-        A split util function for cutting undefined line into pieces.
-        :param line:            A string contains of undefined var.
-        :param info_dict:       Checking dict for checking variable value.
-        :return:
-        """
-        if info_dict is None:
-            info_dict = dict()
-        dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
-        at_var_pattern = r"(.*)\@([a-zA-Z_][a-zA-Z0-9_]*)\@(.*)"
-        with_var_line_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
-
-        with_var_line_match = with_var_line_regex.match(line)
-        # slices will be a reversed list
-        slices = []
-        while with_var_line_match:
-            match_chose = 0
-            if with_var_line_match.group(1) is None:
-                match_chose += 3
-
-            line = with_var_line_match.group(1 + match_chose)
-            undefine_var = with_var_line_match.group(2 + match_chose)
-            other = with_var_line_match.group(3 + match_chose)
-            if undefine_var in info_dict:
-                value = info_dict[undefine_var]
-                if len(value["undefined"]) == 0 and value["option"] is None:
-                    undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
-                    line = line + undefine_var + other
-                elif value["option"] is None:
-                    slices.append(other)
-                    slices.append(value["defined"])
-                    slices.append(value["undefined"])
-                else:
-                    slices.append(other)
-                    if match_chose == 0:
-                        slices.append("$({})".format(undefine_var))
-                    else:
-                        slices.append("@{}@".format(undefine_var))
-            else:
-                slices.append(other)
-                if match_chose == 0:
-                    slices.append("$({})".format(undefine_var))
-                else:
-                    slices.append("@{}@".format(undefine_var))
-            with_var_line_match = with_var_line_regex.match(line)
-        slices.append(line)
-        slices.reverse()
-        return slices
 
     def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
         """Loading include Makefile file."""
@@ -859,7 +788,7 @@ class AutoToolsParser(object):
         second_queue = queue.Queue()
 
         line = " ".join(var_dict.get("undefined", list()))
-        slices = self._undefined_split(line, am_pair_var)
+        slices = capture_util.undefined_split(line, am_pair_var)
         first_queue.put(["",])
 
         dollar_var_pattern = r"\s*\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)"
@@ -1184,27 +1113,6 @@ class AutoToolsParser(object):
         if not has_yield:
             # With no result, at least return one empty string.
             yield [""]
-
-
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    excute = 0
-    for c in s:
-        if c == "'":
-            single += 1
-        elif c == '"':
-            double += 1
-        if c == "`":
-            excute += 1
-
-    move_double = s.count('\\"')
-    move_single = s.count("\\'")
-    single -= move_single
-    double -= move_double
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
-    return is_half_quote
 
 
 if __name__ == "__main__":
