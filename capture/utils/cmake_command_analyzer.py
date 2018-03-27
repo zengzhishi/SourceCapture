@@ -28,7 +28,7 @@ logger = logging.getLogger("capture")
 
 
 def check_one_undefined_slice(slice, with_ac_var=False):
-    undefined_pattern = r"\$[a-zA-Z_][a-zA-Z0-9_]*|\$\([a-zA-Z_][a-zA-Z0-9_]*\)"
+    undefined_pattern = r"\$[a-zA-Z_][a-zA-Z0-9_]*|\$[\{\(][a-zA-Z_][a-zA-Z0-9_]*[\)\}]"
     undefined_at_pattern = r"\@[a-zA-Z_][a-zA-Z0-9_]*\@"
     if with_ac_var:
         undefined_pattern = undefined_pattern + r"|" + undefined_at_pattern
@@ -73,6 +73,31 @@ var_value_pattern = r"\$\(" + var_pattern + r"\)"
 value_without_quote_pattern = r"[^ \t\n\)]+"
 value_with_quote_pattern = docstring_pattern
 filename_flags = ["-I", "-isystem", "-iquote", "-include", "-imacros", "-isysroot"]
+
+prefer_target_properties = [
+    "COMPILE_DEFINITIONS",      # Add definitions for source compiling. Using the syntax VAR or VAR=value.
+    # Function-style definitions are not supported.
+    "COMPILE_FLAGS",            # compile_definitions finally will add to compile_flags and pass preprocessor.
+    "COMPILE_OPTIONS",          # just like COMPILE_FLAGS.
+    "HAS_CXX",                  # Force a target to use the CXX linker
+    "LINKER_LANGUAGE",          # What tool to use for linking, based on language.
+    "LINK_FLAGS",               # flags to use when linking this target.
+    "LINK_INTERFACE_LIBRARIES", # List public interface libraries for a shared library or executable.
+    "LINK_DEPENDS",             # Additional files on which a target binary depends for linking.
+    "STATIC_LIBRARY_FLAGS",     # Extra flags to use when linking static libraries.
+    "TYPE",                     # The type of the target, STATIC_LIBRARY, MODULE_LIBRARY, SHARED_LIBRARY,
+    # EXECUTABLE or one of the internal target types.
+    "CXX_EXTENSIONS",           # Boolean specifying whether compiler specific extensions are requested.
+    "CXX_STANDARD",             # The C++ standard whose features are requested to build this target.
+    # Will add -std=gnu++XX, Supported values are 98, 11 and 14.
+    "C_EXTENSIONS",
+    "C_STANDARD",
+]
+target_properties_set = set()
+with open("cmake_target_properties.txt", "r") as fin:
+    for line in fin:
+        target_properties_set.add(line.strip("\n"))
+
 
 
 def get_option_level(start_dict, options, reverses, is_list=False):
@@ -120,6 +145,22 @@ def get_variable_dict(variable_name, result, options, reverses, is_list=False):
         option_dict = get_option_level(value_list_dict, options, reverses, is_list=True)
     return option_dict
 
+
+def get_target_dict(target_property, target, options, reverses):
+    print(target_property)
+    if target_property not in target:
+        target[target_property] = {
+            "defined": [],
+            "undefined": [],
+            "option": {},
+            "is_replace": False
+        }
+    value_var_dict = target.get(target_property, dict())
+    option_dict = get_option_level(value_var_dict, options, reverses)
+    return option_dict
+
+
+# TODO: 缺少对cmake-generator-expression的解析, 这部分应该是可以做出来的，只是可能语法识别比较繁琐, 暂时先不完成
 
 # 1. Argument config command
 def set_analyzer(match_args_line, result, options, reverses):
@@ -203,6 +244,7 @@ def set_analyzer(match_args_line, result, options, reverses):
             else:
                 option_dict["defined"].append(transfer_word)
             temp = ""
+
     elif len(words) > 1 and not re.match(r"CACHE", words[1]):
         # list config
         if variable_name not in list_var_dict:
@@ -433,14 +475,166 @@ def list_analyzer(match_args_line, result, options, reverses):
     return
 
 
-# 2. include
-def include_directories_analyzer(match_args_line, result, option, reverse):
+# 2. option control
+level_options = []
+
+
+def if_analyzer(match_args_line, options, reverses):
+    options.append(match_args_line)
+    level_options.append(match_args_line)
+    reverses.append(False)
+    return
+
+
+def elseif_analyzer(match_args_line, options, reverses):
+    if len(options) == 0:
+        raise capture_util.ParserError("CMake analysis error when analysis elseif(%s)"
+                                       % match_args_line)
+    options.pop()
+    reverses[-1] = False
+    options.append(match_args_line)
+    level_options.append(match_args_line)
+    return
+
+
+def else_analyzer(match_args_line, options, reverses):
+    if len(options) == 0:
+        raise capture_util.ParserError("CMake analysis error when analysis else()")
+    if len(level_options) > 1:
+        option_str = "OR".join(map("({})".format, level_options))
+        option_str = "NOT ({})".format(option_str)
+        options.pop()
+        options.append(option_str)
+        reverses[-1] = False
+    else:
+        reverses[-1] = not reverses[-1]
+    return
+
+
+def endif_analyzer(match_args_line, options, reverses):
+    if len(options) == 0:
+        raise capture_util.ParserError("CMake analysis error when analysis endif()")
+    options.pop()
+    reverses.pop()
+    return
+
+
+# 3. include
+def include_directories_analyzer(match_args_line, result, options, reverses):
     pass
+
+
+# 4. macros
+def add_definitions_analyzer(match_args_line, result, options, reverses):
+    # 采用add_definitions来添加宏定义的方式，会继承到下一级的cmakelists.txt文件中
+    # TODO: 宏定义的写法有两种 -D...  /D...
+    var_dict = result.get("variables", dict())
+    definitions_dict = result.get("definitions", dict())
+    option_definitions_dict = get_option_level(definitions_dict, options, reverses)
+    words = capture_util.split_line(match_args_line)
+    for (i, word) in enumerate(words):
+        value = word.replace("/D", "-D")
+        slices = capture_util.undefined_split(value, var_dict)
+        transfer_word = "".join(slices)
+        if check_undefined(slices, with_ac_var=False):
+            option_definitions_dict["defined"].append(transfer_word)
+        else:
+            option_definitions_dict["undefined"].append(transfer_word)
+    return
+
+
+# 5. flags
+def add_compile_options_analyzer(match_args_line, result, options, reverses):
+    var_dict = result.get("variables", dict())
+    flags_dict = result.get("flags", dict())
+    definitions_dict = result.get("definitions", dict())
+    option_flags = get_option_level(flags_dict, options, reverses)
+    words = capture_util.split_line(match_args_line)
+    temp = ""
+    for (i, word) in enumerate(words):
+        temp = temp + " " + word if temp else word
+        if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
+            continue
+
+        # Move Macros flags from flags to definitions.
+        # TODO: we can move -I flags to includes
+        if re.match(r"-D", temp):
+            option_dict = get_option_level(definitions_dict, options, reverses)
+        else:
+            option_dict = option_flags
+
+        slices = capture_util.undefined_split(word, var_dict)
+        transfer_word = "".join(slices)
+        if check_undefined(slices, with_ac_var=False):
+            option_dict["defined"].append(transfer_word)
+        else:
+            option_dict["undefined"].append(transfer_word)
+        temp = ""
+    return
 
 
 # other config command
-def set_target_properties_analyzer(match_args_line, result, option, reverse):
-    pass
+
+def set_target_properties_analyzer(match_args_line, result, options, reverses):
+    target_dict = result.get("target", dict())
+    var_dict = result.get("variables", dict())
+    words = capture_util.split_line(match_args_line)
+    idx = 0
+    targets = []
+    try:
+        while words[idx] != "PROPERTIES":
+            # TODO: 还存在一个严重的问题，如果target的名称也是一个变量，那么做起来就很麻烦了。。。,可以考虑直接使用变量来存储key了。。。
+            if words[idx] not in target_dict:
+                # If not found target or target is not append by us, we will not add it to targets.
+                logger.warning("Not found target: %s in output_target." % words[idx])
+            else:
+                targets.append(words[idx])
+            idx += 1
+
+        idx += 1
+        values = []
+        target_property = ""
+        for word in words[idx:]:
+            if word not in target_properties_set:
+                values.append(word)
+            else:
+                if len(target_property) == 0:
+                    target_property = word
+                    if len(values) != 0:
+                        raise capture_util.ParserError("set_target_properties properties fields error!")
+                else:
+                    value = " ".join(values)
+                    for target_name in targets:
+                        target = target_dict.get(target_name, dict())
+                        option_target = get_target_dict(target_property, target, options, reverses)
+                        slices = capture_util.undefined_split(value, var_dict)
+                        transfer_word = "".join(slices)
+                        if check_undefined(slices, with_ac_var=False):
+                            if check_undefined_self(slices, target_property):
+                                if len(slices) == 1:
+                                    option_target["is_replace"] = False
+                                continue
+                            option_target["undefined"].append(transfer_word)
+                        else:
+                            option_target["defined"].append(transfer_word)
+                    values.clear()
+        value = " ".join(values)
+        for target_name in targets:
+            target = target_dict.get(target_name, dict())
+            option_target = get_target_dict(target_property, target, options, reverses)
+            slices = capture_util.undefined_split(value, var_dict)
+            transfer_word = "".join(slices)
+            if check_undefined(slices, with_ac_var=False):
+                if check_undefined_self(slices, target_property):
+                    if len(slices) == 1:
+                        option_target["is_replace"] = False
+                    continue
+                option_target["undefined"].append(transfer_word)
+            else:
+                option_target["defined"].append(transfer_word)
+    except IndexError:
+        raise capture_util.ParserError("set_target_properties arguments analysis error!")
+    return
 
 
 def transform_makefile_inc_analyzer(match_args_line, result, options, reverses):
@@ -458,8 +652,27 @@ if __name__ == "__main__":
 
     result = {
         "variables": dict(),
-        "list_variables": dict()
+        "list_variables": dict(),
+        "target": {
+            "libcurl": dict()
+        },
+
+        # 全局的definitions，可以继承到下一级, 主要是通过add_defnitions() 添加的
+        "definitions": {
+            "defined": [],
+            "undefined": [],
+            "option": {},
+            "is_replace": False,        # always False
+        },
+        "flags": {
+            "defined": [],
+            "undefined": [],
+            "option": {},
+            "is_replace": False,        # always False
+        }
     }
+    options = []
+    reverses = []
 
     with open(filename, "r") as fin:
         data = fin.read()
@@ -467,17 +680,48 @@ if __name__ == "__main__":
         lines = []
         set_regex = re.compile(r"[Ss][Ee][Tt]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
         list_regex = re.compile(r"[Ll][Ii][Ss][Tt]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+        if_regex = re.compile(r"[Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+        elseif_regex = re.compile(r"[Ee][Ll][Ss][Ee][Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+        else_regex = re.compile(r"[Ee][Ll][Ss][Ee]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+        endif_regex = re.compile(r"[Ee][Nn][Dd][Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+        set_target_properties_regex = re.compile(r"set_target_properties\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+
         while len(data) != 0:
             set_match = set_regex.match(data)
             list_match = list_regex.match(data)
+            if_match = if_regex.match(data)
+            elseif_match = elseif_regex.match(data)
+            else_match = else_regex.match(data)
+            endif_match = endif_regex.match(data)
+            set_target_properties_match = set_target_properties_regex.match(data)
             if set_match:
                 line = set_match.group(1)
-                set_analyzer(line, result, options=[], reverses=[])
+                set_analyzer(line, result, options=options, reverses=reverses)
                 data = set_match.group(2)
             elif list_match:
                 line = list_match.group(1)
-                list_analyzer(line, result, options=[], reverses=[])
+                list_analyzer(line, result, options=options, reverses=reverses)
                 data = list_match.group(2)
+            elif if_match:
+                line = if_match.group(1)
+                if_analyzer(line, options=options, reverses=reverses)
+                data = if_match.group(2)
+            elif elseif_match:
+                line = elseif_match.group(1)
+                elseif_analyzer(line, options=options, reverses=reverses)
+                data = elseif_match.group(2)
+            elif else_match:
+                line = else_match.group(1)
+                else_analyzer(line, options=options, reverses=reverses)
+                data = else_match.group(2)
+            elif endif_match:
+                line = endif_match.group(1)
+                endif_analyzer(line, options=options, reverses=reverses)
+                data = endif_match.group(2)
+            elif set_target_properties_match:
+                line = set_target_properties_match.group(1)
+                set_target_properties_analyzer(line, result, options, reverses)
+                data = set_target_properties_match.group(2)
             else:
                 logger.warning("file analyze fail with an unknown line '%s' in %s." %
                                (data.split("\n")[0], fin.name))
