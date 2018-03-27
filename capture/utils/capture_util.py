@@ -79,7 +79,7 @@ def undefined_split(line, info_dict=None):
     """
     if info_dict is None:
         info_dict = dict()
-    dollar_var_pattern = r"(.*)\$\(([a-zA-Z_][a-zA-Z0-9_]*)\)(.*)"
+    dollar_var_pattern = r"(.*)\$[\({]([a-zA-Z_][a-zA-Z0-9_]*)[\)}](.*)"
     at_var_pattern = r"(.*)\@([a-zA-Z_][a-zA-Z0-9_]*)\@(.*)"
     with_var_line_regex = re.compile(dollar_var_pattern + r"|" + at_var_pattern)
 
