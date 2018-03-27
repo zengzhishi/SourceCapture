@@ -7,6 +7,7 @@
     @CreatTime: 2018-03-24 21:05:23
     @LastModif: 2018-03-24 21:17:10
     @Note: Define some cmake commands analyzer here.
+    TODO: 缺少对cmake-generator-expression的解析, 这部分应该是可以做出来的，只是可能语法识别比较繁琐, 暂时先不完成
 """
 import re
 import sys
@@ -99,7 +100,6 @@ with open("cmake_target_properties.txt", "r") as fin:
         target_properties_set.add(line.strip("\n"))
 
 
-
 def get_option_level(start_dict, options, reverses, is_list=False):
     """Get the present option level var_dict."""
     if len(options) == 0:
@@ -159,8 +159,6 @@ def get_target_dict(target_property, target, options, reverses):
     option_dict = get_option_level(value_var_dict, options, reverses)
     return option_dict
 
-
-# TODO: 缺少对cmake-generator-expression的解析, 这部分应该是可以做出来的，只是可能语法识别比较繁琐, 暂时先不完成
 
 # 1. Argument config command
 def set_analyzer(match_args_line, result, options, reverses):
@@ -574,7 +572,6 @@ def add_compile_options_analyzer(match_args_line, result, options, reverses):
 
 
 # other config command
-
 def set_target_properties_analyzer(match_args_line, result, options, reverses):
     target_dict = result.get("target", dict())
     var_dict = result.get("variables", dict())
@@ -640,7 +637,14 @@ def set_target_properties_analyzer(match_args_line, result, options, reverses):
 def transform_makefile_inc_analyzer(match_args_line, result, options, reverses):
     pass
 
-# vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
+
+# add target
+def add_executable_analyzer(match_args_line, result, options, reverses):
+    pass
+
+
+def add_library(match_args_line, result, options, reverses):
+    pass
 
 
 if __name__ == "__main__":
@@ -732,3 +736,5 @@ if __name__ == "__main__":
     import json
     with open("./data_result.out", "w") as fout:
         json.dump(result, fout, indent=4)
+
+# vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
