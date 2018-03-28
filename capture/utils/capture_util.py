@@ -118,6 +118,16 @@ def undefined_split(line, info_dict=None):
         with_var_line_match = with_var_line_regex.match(line)
     slices.append(line)
     slices.reverse()
+    idx = 0
+    while idx != -1:
+        if idx >= len(slices):
+            idx = -1
+        else:
+            slice = slices[idx]
+            if len(slice) == 0:
+                slices.pop(idx)
+                continue
+            idx += 1
     return slices
 
 

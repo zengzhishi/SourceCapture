@@ -9,6 +9,7 @@
     @Note: Define some cmake commands analyzer here.
     TODO: 缺少对cmake-generator-expression的解析, 这部分应该是可以做出来的，只是可能语法识别比较繁琐, 暂时先不完成
 """
+import os
 import re
 import sys
 import logging
@@ -59,10 +60,10 @@ def check_one_undefined_slice_self(slice, self_var):
 
 def check_undefined_self(slices, self_var):
     """Checking undefined slices whether contain itself variables."""
-    for slice in slices:
+    for i, slice in enumerate(slices):
         if check_one_undefined_slice_self(slice, self_var):
-            return True
-    return False
+            return True, i
+    return False, -1
 
 
 # set_cache_type = ["BOOL", "FILEPATH", "PATH", "STRING", "INTERNAL"]
@@ -171,8 +172,11 @@ def set_analyzer(match_args_line, result, options, reverses):
     variable_match = variable_regex.match(match_args_line)
     env_regex = re.compile("\s*ENV{(" + var_pattern + ")}\s+(.*)", flags=re.DOTALL)
     env_match = env_regex.match(match_args_line)
+
+    # SET variable is a ${} type, is difficult to analysis.
     if not variable_match and not env_match:
-        raise capture_util.ParserError("Set pattern error in set({}).".format(match_args_line))
+        logger.warning("Set pattern error in set({}). Because of the var_name.".format(match_args_line))
+        return
 
     if variable_match:
         variable_name = variable_match.group(1)
@@ -199,7 +203,7 @@ def set_analyzer(match_args_line, result, options, reverses):
         option_dict["defined"] = []
         option_dict["undefined"] = []
 
-    elif len(words) == 1 or len(words) > 1 and re.match(r"CACHE", words[1]):
+    elif len(words) == 1 or len(words) > 1 and re.match(r"CACHE|PARENT_SCOPE", words[1]):
         # one elem config
         value_line = words[0]
         value_line = capture_util.strip_quotes(value_line)
@@ -223,21 +227,29 @@ def set_analyzer(match_args_line, result, options, reverses):
             if i != len(values) - 1 and word in filename_flags and values[i + 1][0] != '-':
                 continue
 
-            value_with_quote_match = re.match(r"\"([^\\\"])\"", temp, flags=re.DOTALL)
+            value_with_quote_match = re.match(r"\"([^\\\"]*)\"", temp, flags=re.DOTALL)
             if value_with_quote_match:
                 value = value_with_quote_match.group(1)
             else:
                 value = word
             slices = capture_util.undefined_split(value, var_dict)
 
-            transfer_word = "".join(slices)
             # TODO: 暂时无法表达 string 拼接操作
-            if check_undefined(slices, with_ac_var=False):
-                if check_undefined_self(slices, variable_name):
-                    if len(slices) == 1:
-                        option_dict["is_replace"] = False
+            self_status, idx = check_undefined_self(slices, variable_name)
+            if self_status:
+                if len(slices) == 1:
+                    option_dict["is_replace"] = False
                     temp = ""
                     continue
+                elif len(var_dict.get("option", dict())) == 0 and \
+                        len(var_dict.get("undefined", list())) == 0:
+                    value = " ".join(var_dict.get("defined", list()))
+                    slices[idx] = value
+                else:
+                    temp = ""
+                    continue
+            transfer_word = "".join(slices)
+            if check_undefined(slices, with_ac_var=False):
                 option_dict["undefined"].append(transfer_word)
             else:
                 option_dict["defined"].append(transfer_word)
@@ -477,14 +489,14 @@ def list_analyzer(match_args_line, result, options, reverses):
 level_options = []
 
 
-def if_analyzer(match_args_line, options, reverses):
+def if_analyzer(match_args_line, result, options, reverses):
     options.append(match_args_line)
     level_options.append(match_args_line)
     reverses.append(False)
     return
 
 
-def elseif_analyzer(match_args_line, options, reverses):
+def elseif_analyzer(match_args_line, result, options, reverses):
     if len(options) == 0:
         raise capture_util.ParserError("CMake analysis error when analysis elseif(%s)"
                                        % match_args_line)
@@ -495,7 +507,7 @@ def elseif_analyzer(match_args_line, options, reverses):
     return
 
 
-def else_analyzer(match_args_line, options, reverses):
+def else_analyzer(match_args_line, result, options, reverses):
     if len(options) == 0:
         raise capture_util.ParserError("CMake analysis error when analysis else()")
     if len(level_options) > 1:
@@ -509,9 +521,10 @@ def else_analyzer(match_args_line, options, reverses):
     return
 
 
-def endif_analyzer(match_args_line, options, reverses):
+def endif_analyzer(match_args_line, result, options, reverses):
     if len(options) == 0:
         raise capture_util.ParserError("CMake analysis error when analysis endif()")
+    level_options.clear()
     options.pop()
     reverses.pop()
     return
@@ -519,7 +532,44 @@ def endif_analyzer(match_args_line, options, reverses):
 
 # 3. include
 def include_directories_analyzer(match_args_line, result, options, reverses):
-    pass
+    var_dict = result.get("variables", dict())
+    includes_dict = result.get("includes", dict())
+    words = capture_util.split_line(match_args_line)
+    for (i, word) in enumerate(words):
+        if i == 0 or i == 1:
+            if re.match("AFTER|BEFORE|SYSTEM", word):
+                continue
+
+        slices = capture_util.undefined_split(word, var_dict)
+        transfer_word = "".join(slices)
+        if check_undefined(slices, with_ac_var=False):
+            includes_dict["undefined"].append(transfer_word)
+        else:
+            includes_dict["defined"].append(transfer_word)
+    return
+
+
+# For target include, but just directly move them to global value.
+def target_include_directories_analyzer(match_args_line, result, options, reverses):
+    includes_dict = result.get("includes", dict())
+    var_dict = result.get("variable", dict())
+    option_includes_dict = get_option_level(includes_dict, options, reverses)
+    words = capture_util.split_line(match_args_line)
+    allow_add_item = False
+    for (i, word) in enumerate(words):
+        if re.match(r"INTERFACE|PUBLIC|PRIVATE", word):
+            allow_add_item = True
+        if allow_add_item and not re.match(r"INTERFACE|PUBLIC|PRIVATE", word):
+            slices = capture_util.undefined_split(word, var_dict)
+            transfer_word = "".join(slices)
+            if check_undefined(slices, with_ac_var=False):
+                option_includes_dict["undefined"].append(transfer_word)
+            elif re.match("\$<.*?>", word):
+                # generator command may be difficult to analyze.
+                pass
+            else:
+                option_includes_dict["defined"].append(transfer_word)
+    return
 
 
 # 4. macros
@@ -535,9 +585,9 @@ def add_definitions_analyzer(match_args_line, result, options, reverses):
         slices = capture_util.undefined_split(value, var_dict)
         transfer_word = "".join(slices)
         if check_undefined(slices, with_ac_var=False):
-            option_definitions_dict["defined"].append(transfer_word)
-        else:
             option_definitions_dict["undefined"].append(transfer_word)
+        else:
+            option_definitions_dict["defined"].append(transfer_word)
     return
 
 
@@ -569,6 +619,52 @@ def add_compile_options_analyzer(match_args_line, result, options, reverses):
             option_dict["undefined"].append(transfer_word)
         temp = ""
     return
+
+
+# 6. option for generating config.h
+def option_analyzer(match_args_line, result, options, reverses):
+    var_dict = result.get("variables", dict())
+    config_dict = result.get("config_option", dict())
+    words = capture_util.split_line(match_args_line)
+    if len(words) > 0:
+        name = words[0]
+        docstring = ""
+        initial_value = "OFF"
+    else:
+        raise capture_util.ParserError("option analysis fail. 'option(%s)' " % match_args_line)
+
+    # docstring presently will not be used.
+    if len(words) == 2:
+        if re.match(r"ON|OFF", words[1]):
+            initial_value = words[1]
+        else:
+            docstring = words[1]
+
+    if len(words) == 3:
+        initial_value = words[2]
+
+    if name not in config_dict:
+        config_dict[name] = {
+            "defined": [],
+            "undefined": [],
+            "option": {},
+            "is_replace": True
+        }
+    present_var_config_dict = config_dict.get(name)
+    option_config_dict = get_option_level(present_var_config_dict, options, reverses)
+    value = capture_util.strip_quotes(initial_value)
+    slices = capture_util.undefined_split(value, var_dict)
+    transfer_word = "".join(slices)
+    if check_undefined(slices, with_ac_var=False):
+        option_config_dict["undefined"].append(transfer_word)
+    else:
+        option_config_dict["defined"].append(transfer_word)
+    return
+
+
+def configure_file_analyzer(match_args_line, result, options, reverses):
+    # TODO: 只提取最终生成 .h文件就可以, 其他的太麻烦了
+    pass
 
 
 # other config command
@@ -635,16 +731,258 @@ def set_target_properties_analyzer(match_args_line, result, options, reverses):
 
 
 def transform_makefile_inc_analyzer(match_args_line, result, options, reverses):
+    var_dict = result.get("variables", dict())
+    words = capture_util.split_line(match_args_line)
+    if len(words) != 2:
+        logger.warning("Can't analyze transform_makefile_inc(%s)" % match_args_line)
+        return
+    src = words[0]
+    des = words[1]
+    value_with_quote_match = re.match(r"\"([^\\\"]*)\"", src, flags=re.DOTALL)
+    if value_with_quote_match:
+        src = value_with_quote_match.group(1)
+    else:
+        src = src
+    # TODO: 可以调用 autotools.py 里面的解析方法
     pass
 
 
 # add target
+def add_library_analyzer(match_args_line, result, options, reverses):
+    var_dict = result.get("variables", dict())
+    target_dict = result.get("targets", dict())
+    words = capture_util.split_line(match_args_line)
+    if words == 0:
+        logger.warning("Add Lib target fail.")
+        return
+    target_name = words[0]
+    target_list = [target_name]
+    words = words[1:]
+    variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)", flags=re.DOTALL)
+    variable_match = variable_regex.match(match_args_line)
+    match = re.match("${(.*?)}", target_name)
+    if match:
+        # lib name may be use ${}
+        name = match.group(1)
+        if name in var_dict:
+            value_dict = var_dict.get(name, dict())
+            if len(value_dict.get("option", dict())) == 0 and \
+                len(value_dict.get("undefined", list())) == 0:
+                defined = value_dict.get("defined", list())
+                value = " ".join(defined)
+                target_list.append(value)
+    elif not variable_match:
+        logger.warning("Lib target name strip fail.")
+        return
+
+    library_type = None
+    if len(words) > 1 and re.match("STATIC|SHARED|MODULE", words[0]):
+        library_type = words[0] + "LIBRARY"
+        words = words[1:]
+
+    # sources 暂时不处理
+    for target_name in target_list:
+        target_dict[target_name] = dict()
+        if library_type is not None:
+            target_dict[target_name]["TYPE"] = library_type
+    return
+
+
 def add_executable_analyzer(match_args_line, result, options, reverses):
-    pass
+    var_dict = result.get("variables", dict())
+    target_dict = result.get("targets", dict())
+    words = capture_util.split_line(match_args_line)
+    if words == 0:
+        logger.warning("Add Executable target fail.")
+        return
+    target_name = words[0]
+    target_list = [target_name]
+    words = words[1:]
+    variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)", flags=re.DOTALL)
+    variable_match = variable_regex.match(match_args_line)
+    match = re.match("${(.*?)}", target_name)
+    if match:
+        name = match.group(1)
+        if name in var_dict:
+            value_dict = var_dict.get(name, dict())
+            if len(value_dict.get("option", dict())) == 0 and \
+                    len(value_dict.get("undefined", list())) == 0:
+                defined = value_dict.get("defined", list())
+                value = " ".join(defined)
+                target_list.append(value)
+    elif not variable_match:
+        logger.warning("Executable target name strip fail.")
+        return
+
+    # sources 暂时不处理
+    for target_name in target_list:
+        target_dict[target_name] = dict()
+    return
 
 
-def add_library(match_args_line, result, options, reverses):
-    pass
+# other
+def set_property_analyzer(match_args_line, result, options, reverses):
+    scope_target_dict = result.get("scope_target", dict())
+    var_dict = result.get("variables", dict())
+
+    words = capture_util.split_line(match_args_line)
+    try:
+        scopename = words[0]
+        idx = 1
+        target_list = []
+        to_delete_idx = []
+        # TODO: 这里没有区分list 和 string来存储
+        is_list = False
+        while words[idx] != "PROPERTY":
+            if words[idx] == "APPEND_STRING":
+                to_delete_idx.append(idx)
+            if words[idx] == "APPEND":
+                is_list = True
+                to_delete_idx.append(idx)
+            else:
+                target_list.append(words[idx])
+            idx += 1
+        to_delete_idx.sort(reverse=True)
+
+        if scopename == "TARGET":
+            [words.pop(i) for i in to_delete_idx]
+            words.pop(0)
+            target_match_args_line = " ".join(words)
+            return set_target_properties_analyzer(target_match_args_line, result, options, reverses)
+        else:
+            # Here will storage all property value.
+            idx += 1
+            property_name = words[idx]
+            option_dict = get_target_dict(property_name, scope_target_dict, options, reverses)
+            for word in words[idx + 1:]:
+                value = capture_util.strip_quotes(word)
+                slices = capture_util.undefined_split(value, var_dict)
+                transfer_word = "".join(slices)
+                if check_undefined(slices, with_ac_var=False):
+                    option_dict["undefined"].append(transfer_word)
+                else:
+                    option_dict["defined"].append(transfer_word)
+    except IndexError:
+        raise capture_util.ParserError("set_properties arguments analysis error!")
+    return
+
+
+def not_found_analyzer(match_args_line, result, options, reverses):
+    logger.warning("Not found analyzer for such command")
+    return
+
+
+def get_next_rparen(s):
+    if len(s) == 0:
+        return None
+    idx = s.find(")")
+    if idx != -1:
+        return s[:idx]
+    return ""
+
+
+def get_cmake_command(s, cmake_path, result):
+    """A generator to analysis cmake commands from CMakeLists.txt"""
+    var_dict = result.get("variables", dict())
+    present_str = s
+    if len(present_str) == 0:
+        return
+    comment_regex = re.compile(r"#(.*?)\n(.*)", flags=re.DOTALL)
+    command_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    include_regex = re.compile(r"include\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    present_str = present_str.lstrip(" \t\n")
+    while len(present_str) != 0:
+        comment_match = comment_regex.match(present_str)
+        command_match = command_regex.match(present_str)
+        include_match = include_regex.match(present_str)
+        if comment_match:
+            comment_line = comment_match.group(1)
+            present_str = comment_match.group(2)
+        elif include_match:
+            include_args_line = include_match.group(1)
+            present_str = include_match.group(2)
+            words = capture_util.split_line(include_args_line)
+            dest = words[0]
+            dest = capture_util.strip_quotes(dest)
+            slices = dest.split(".")
+            if len(slices) > 1:
+                # Use file path
+                if slices[-1] == "cmake":
+                    file_path = os.path.join(cmake_path, dest)
+                    with open(file_path, "r") as fin:
+                        data = fin.read()
+                        data += present_str
+                        present_str = data
+                else:
+                    logger.warning("Unknown cmake module file to include")
+            else:
+                # Use module name
+                if "CMAKE_MODULE_PATH" not in var_dict:
+                    logger.warning("Couldn't found cmake module file in module path.")
+                    continue
+                cmake_module_path = var_dict.get("CMAKE_MODULE_PATH", dict())
+                if len(cmake_module_path.get("option", dict())) != 0 or \
+                    len(cmake_module_path.get("undefined", list())) != 0:
+                    logger.warning("Could't get value of CMAKE_MODULE_PATH.")
+                    continue
+                module_paths_str = " ".join(cmake_module_path.get("defined", list()))
+                module_paths = module_paths_str.split(";")
+                data = ""
+                for module_path in module_paths:
+                    if not os.path.isabs(module_path):
+                        file_path = os.path.join(cmake_path, module_path, dest + ".cmake")
+                    else:
+                        file_path = os.path.join(module_path, dest + ".cmake")
+                    print(file_path)
+                    if os.path.exists(file_path):
+                        with open(file_path, "r") as fin:
+                            data = fin.read()
+                        break
+                if len(data) == 0:
+                    logger.warning("Not found cmake module.")
+                data += present_str
+                present_str = data
+        elif command_match:
+            command_name = command_match.group(1)
+            match_args_line = command_match.group(2)
+            present_str = command_match.group(3)
+            double_quote_count = len(re.findall(r'"', match_args_line))
+            double_quote_exclude_count = len(re.findall(r"\\\"", line))
+            lparen_count = len(re.findall("\(", match_args_line))
+            rparen_count = len(re.findall("\)", match_args_line))
+            while (double_quote_count - double_quote_exclude_count) % 2 != 0 or \
+                lparen_count - rparen_count > 0:
+                next_str = get_next_rparen(present_str)
+                if next_str is None and next == "":
+                    raise capture_util.ParserError("Command analysis fail!")
+                match_args_line += ")" + next_str
+                double_quote_count = len(re.findall(r'"', match_args_line))
+                double_quote_exclude_count = len(re.findall(r"\\\"", match_args_line))
+                lparen_count = len(re.findall("\(", match_args_line))
+                rparen_count = len(re.findall("\)", match_args_line))
+                present_str = present_str[len(next_str) + 1:]
+            yield command_name, match_args_line
+        else:
+            logger.warning("Command_analysis error happend in line: '%s'" %
+                           present_str.split("\n")[0])
+            i = present_str.find("\n")
+            present_str = present_str[i:]
+
+        present_str = present_str.lstrip(" \t\n")
+
+
+def get_command_name_pattern(name):
+    pattern_name = r""
+    for i in name:
+        pattern_name += r"[{}{}]".format(i.lower(), i.upper())
+    return pattern_name
+
+
+def get_command_analyzer(name):
+    # TODO: Need to add default function when no analyzer in this module
+    current_module = sys.modules[__name__]
+    analyzer_funcname = "{}_analyzer".format(name.lower())
+    return getattr(current_module, analyzer_funcname)
 
 
 if __name__ == "__main__":
@@ -660,20 +998,24 @@ if __name__ == "__main__":
         "target": {
             "libcurl": dict()
         },
-
-        # 全局的definitions，可以继承到下一级, 主要是通过add_defnitions() 添加的
+        # Use to storage set_property scope variables, except target scope
+        "scope_target": dict(),
+        # global definitions， can be passed to subdirecotries
         "definitions": {
             "defined": [],
             "undefined": [],
             "option": {},
             "is_replace": False,        # always False
         },
+        "includes": {},
         "flags": {
             "defined": [],
             "undefined": [],
             "option": {},
             "is_replace": False,        # always False
-        }
+        },
+        # This field is used to storage option config for generating config.h file.
+        "config_option": dict()
     }
     options = []
     reverses = []
@@ -681,57 +1023,33 @@ if __name__ == "__main__":
     with open(filename, "r") as fin:
         data = fin.read()
         data = data.lstrip(" \t\n")
-        lines = []
-        set_regex = re.compile(r"[Ss][Ee][Tt]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        list_regex = re.compile(r"[Ll][Ii][Ss][Tt]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        if_regex = re.compile(r"[Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        elseif_regex = re.compile(r"[Ee][Ll][Ss][Ee][Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        else_regex = re.compile(r"[Ee][Ll][Ss][Ee]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        endif_regex = re.compile(r"[Ee][Nn][Dd][Ii][Ff]\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-        set_target_properties_regex = re.compile(r"set_target_properties\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-
-        while len(data) != 0:
-            set_match = set_regex.match(data)
-            list_match = list_regex.match(data)
-            if_match = if_regex.match(data)
-            elseif_match = elseif_regex.match(data)
-            else_match = else_regex.match(data)
-            endif_match = endif_regex.match(data)
-            set_target_properties_match = set_target_properties_regex.match(data)
-            if set_match:
-                line = set_match.group(1)
-                set_analyzer(line, result, options=options, reverses=reverses)
-                data = set_match.group(2)
-            elif list_match:
-                line = list_match.group(1)
-                list_analyzer(line, result, options=options, reverses=reverses)
-                data = list_match.group(2)
-            elif if_match:
-                line = if_match.group(1)
-                if_analyzer(line, options=options, reverses=reverses)
-                data = if_match.group(2)
-            elif elseif_match:
-                line = elseif_match.group(1)
-                elseif_analyzer(line, options=options, reverses=reverses)
-                data = elseif_match.group(2)
-            elif else_match:
-                line = else_match.group(1)
-                else_analyzer(line, options=options, reverses=reverses)
-                data = else_match.group(2)
-            elif endif_match:
-                line = endif_match.group(1)
-                endif_analyzer(line, options=options, reverses=reverses)
-                data = endif_match.group(2)
-            elif set_target_properties_match:
-                line = set_target_properties_match.group(1)
-                set_target_properties_analyzer(line, result, options, reverses)
-                data = set_target_properties_match.group(2)
-            else:
-                logger.warning("file analyze fail with an unknown line '%s' in %s." %
-                               (data.split("\n")[0], fin.name))
-                index = data.find("\n")
-                data = data[index:]
-            data = data.lstrip(" \t\n")
+        commands = [
+            "set",
+            "list",
+            "if",
+            "elseif",
+            "else",
+            "endif",
+            "set_property",
+            "set_target_properties",
+            "option",
+            "add_library",
+            "add_executable",
+            "target_include_directories",
+            "add_definitions",
+            "include_directories",
+        ]
+        command_name_patterns = map(lambda command: get_command_name_pattern(command), commands)
+        command_pattern = "|".join(command_name_patterns)
+        command_regex = re.compile(command_pattern)
+        # TODO: Need to add some process for self-defined function analyze.
+        cmake_path = os.path.dirname(filename)
+        for command_name, args_line in get_cmake_command(data, cmake_path, result):
+            if not command_regex.match(command_name):
+                # Command we don't care will be passed.
+                continue
+            analyzer = get_command_analyzer(command_name)
+            analyzer(args_line, result, options, reverses)
 
     import json
     with open("./data_result.out", "w") as fout:
