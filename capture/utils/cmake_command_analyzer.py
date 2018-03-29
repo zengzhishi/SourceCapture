@@ -14,17 +14,14 @@ import re
 import sys
 import logging
 
-if __name__ == "__main__":
-    import capture_util
-    sys.path.append("../conf")
-    import parse_logger
-    parse_logger.addFileHandler("./capture.log", "capture")
-#     from m4_macros_analysis import check_undefined, check_one_undefined_slice
-#     from m4_macros_analysis import check_undefined_self, check_one_undefined_slice_self
-else:
-    import capture.utils.capture_util as capture_util
-#     from capture.utils.m4_macros_analysis import check_one_undefined_slice, check_undefined
-#     from capture.utils.m4_macros_analysis import check_one_undefined_slice_self, check_undefined_self
+import capture_util
+# if __name__ == "__main__":
+#     import capture_util
+#     sys.path.append("../conf")
+#     import parse_logger
+#     parse_logger.addFileHandler("./capture.log", "capture")
+# else:
+#     import capture.utils.capture_util as capture_util
 
 logger = logging.getLogger("capture")
 
@@ -148,7 +145,6 @@ def get_variable_dict(variable_name, result, options, reverses, is_list=False):
 
 
 def get_target_dict(target_property, target, options, reverses):
-    print(target_property)
     if target_property not in target:
         target[target_property] = {
             "defined": [],
@@ -161,6 +157,15 @@ def get_target_dict(target_property, target, options, reverses):
     return option_dict
 
 
+def get_defined_value(option_dict):
+    if len(option_dict.get("option", dict())) == 0 and \
+            len(option_dict.get("undefined", dict())) == 0:
+        defineds = option_dict.get("defined", list())
+        value = " ".join(defineds)
+        return value
+    return None
+
+
 # 1. Argument config command
 def set_analyzer(match_args_line, result, options, reverses):
     var_dict = result.get("variables", dict())
@@ -168,22 +173,22 @@ def set_analyzer(match_args_line, result, options, reverses):
 
     # 1. variable
     # TODO: consider whether we need a env_variable dict
-    variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)", flags=re.DOTALL)
+    variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)|\s*(" + var_pattern + ")", flags=re.DOTALL)
     variable_match = variable_regex.match(match_args_line)
-    env_regex = re.compile("\s*ENV{(" + var_pattern + ")}\s+(.*)", flags=re.DOTALL)
+    env_regex = re.compile("\s*ENV{(" + var_pattern + ")}\s+(.*)|\s*ENV{(" + var_pattern + ")}", flags=re.DOTALL)
     env_match = env_regex.match(match_args_line)
 
     # SET variable is a ${} type, is difficult to analysis.
     if not variable_match and not env_match:
-        logger.warning("Set pattern error in set({}). Because of the var_name.".format(match_args_line))
+        logger.warning("Set pattern error in set({}). var_name is not a defined value.".format(match_args_line))
         return
 
     if variable_match:
-        variable_name = variable_match.group(1)
-        match_line = variable_match.group(2)
+        variable_name = variable_match.group(1) if variable_match.group(1) is not None else variable_match.group(3)
+        match_line = variable_match.group(2) if variable_match.group(1) is not None else ""
     else:
-        variable_name = env_match.group(1)
-        match_line = env_match.group(2)
+        variable_name = env_match.group(1) if env_match.group(1) is not None else env_match.group(3)
+        match_line = env_match.group(2) if env_match.group(1) is not None else ""
 
     # 2. value
     words = capture_util.split_line(match_line)
@@ -887,9 +892,9 @@ def get_cmake_command(s, cmake_path, result):
     present_str = s
     if len(present_str) == 0:
         return
-    comment_regex = re.compile(r"#(.*?)\n(.*)", flags=re.DOTALL)
-    command_regex = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
-    include_regex = re.compile(r"include\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    comment_regex = re.compile(r"\s*#(.*?)\n(.*)", flags=re.DOTALL)
+    command_regex = re.compile(r"\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    include_regex = re.compile(r"\s*include\s*\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
     present_str = present_str.lstrip(" \t\n")
     while len(present_str) != 0:
         comment_match = comment_regex.match(present_str)
@@ -908,11 +913,27 @@ def get_cmake_command(s, cmake_path, result):
             if len(slices) > 1:
                 # Use file path
                 if slices[-1] == "cmake":
-                    file_path = os.path.join(cmake_path, dest)
-                    with open(file_path, "r") as fin:
-                        data = fin.read()
-                        data += present_str
-                        present_str = data
+                    slices = capture_util.undefined_split(dest)
+                    values = []
+                    for slice in slices:
+                        variable_match = re.match(r"(.*)\$[\({]([a-zA-Z_][a-zA-Z0-9_]*)[\)}](.*)", slice)
+                        if variable_match:
+                            name = variable_match.group(2)
+                            value = get_defined_value(var_dict.get(name, dict()))
+                            if value is None:
+                                values = None
+                                break
+                            values.append(value)
+                        else:
+                            values.append(slice)
+                    if values is not None:
+                        transfer_dest = "".join(values)
+                        file_path = os.path.join(cmake_path, transfer_dest)
+                        if os.path.exists(file_path):
+                            with open(file_path, "r") as fin:
+                                data = fin.read()
+                                data += present_str
+                                present_str = data
                 else:
                     logger.warning("Unknown cmake module file to include")
             else:
@@ -921,9 +942,8 @@ def get_cmake_command(s, cmake_path, result):
                     logger.warning("Couldn't found cmake module file in module path.")
                     continue
                 cmake_module_path = var_dict.get("CMAKE_MODULE_PATH", dict())
-                if len(cmake_module_path.get("option", dict())) != 0 or \
-                    len(cmake_module_path.get("undefined", list())) != 0:
-                    logger.warning("Could't get value of CMAKE_MODULE_PATH.")
+                arg_value = get_defined_value(cmake_module_path)
+                if arg_value is None:
                     continue
                 module_paths_str = " ".join(cmake_module_path.get("defined", list()))
                 module_paths = module_paths_str.split(";")
@@ -933,7 +953,6 @@ def get_cmake_command(s, cmake_path, result):
                         file_path = os.path.join(cmake_path, module_path, dest + ".cmake")
                     else:
                         file_path = os.path.join(module_path, dest + ".cmake")
-                    print(file_path)
                     if os.path.exists(file_path):
                         with open(file_path, "r") as fin:
                             data = fin.read()
@@ -974,7 +993,11 @@ def get_cmake_command(s, cmake_path, result):
 def get_command_name_pattern(name):
     pattern_name = r""
     for i in name:
-        pattern_name += r"[{}{}]".format(i.lower(), i.upper())
+        if re.match("[a-zA-Z]", i):
+            pattern_name += r"[{}{}]".format(i.lower(), i.upper())
+        else:
+            pattern_name += i
+    pattern_name += r"\("
     return pattern_name
 
 
@@ -1007,7 +1030,12 @@ if __name__ == "__main__":
             "option": {},
             "is_replace": False,        # always False
         },
-        "includes": {},
+        "includes": {
+            "defined": [],
+            "undefined": [],
+            "option": {},
+            "is_replace": False,        # always False
+        },
         "flags": {
             "defined": [],
             "undefined": [],
@@ -1039,13 +1067,15 @@ if __name__ == "__main__":
             "add_definitions",
             "include_directories",
         ]
+        commands.sort(key=len, reverse=True)
         command_name_patterns = map(lambda command: get_command_name_pattern(command), commands)
         command_pattern = "|".join(command_name_patterns)
         command_regex = re.compile(command_pattern)
         # TODO: Need to add some process for self-defined function analyze.
         cmake_path = os.path.dirname(filename)
         for command_name, args_line in get_cmake_command(data, cmake_path, result):
-            if not command_regex.match(command_name):
+            print(command_name)
+            if not command_regex.match(command_name + "("):
                 # Command we don't care will be passed.
                 continue
             analyzer = get_command_analyzer(command_name)
