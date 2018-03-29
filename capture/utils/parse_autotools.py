@@ -499,9 +499,9 @@ class AutoToolsParser(object):
             if include_match:
                 folder = os.path.sep.join(fhandle_am.name.split(os.path.sep)[:-1])
                 include_path = os.path.join(folder, include_match.group(1))
-                self._loading_include(am_pair_var, include_path, options, is_in_reverse)
+                self.loading_include(am_pair_var, include_path, options, is_in_reverse)
 
-    def _loading_include(self, am_pair_var, include_path, options, is_in_reverse):
+    def loading_include(self, am_pair_var, include_path, options, is_in_reverse):
         """Loading include Makefile file."""
         with open(include_path, "r") as include_fin:
             self._reading_makefile_am(am_pair_var, include_fin, options, is_in_reverse)

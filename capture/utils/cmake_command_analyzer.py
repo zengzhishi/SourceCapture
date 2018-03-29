@@ -14,14 +14,16 @@ import re
 import sys
 import logging
 
-import capture_util
+# import capture_util
+# import parse_autotools
 # if __name__ == "__main__":
 #     import capture_util
 #     sys.path.append("../conf")
 #     import parse_logger
 #     parse_logger.addFileHandler("./capture.log", "capture")
 # else:
-#     import capture.utils.capture_util as capture_util
+import capture.utils.capture_util as capture_util
+import capture.utils.parse_autotools as parse_autotools
 
 logger = logging.getLogger("capture")
 
@@ -93,7 +95,8 @@ prefer_target_properties = [
     "C_STANDARD",
 ]
 target_properties_set = set()
-with open("cmake_target_properties.txt", "r") as fin:
+dir_name = os.path.dirname(__file__)
+with open(os.path.join(dir_name, "cmake_target_properties.txt"), "r") as fin:
     for line in fin:
         target_properties_set.add(line.strip("\n"))
 
@@ -117,6 +120,13 @@ def get_option_level(start_dict, options, reverses, is_list=False):
                 }
         present_dict = present_dict["option"][option][not reverse_stat]
     return present_dict
+
+
+def check_variable(word):
+    dollar_var_pattern = r"\$[\({]([a-zA-Z_][a-zA-Z0-9_]*)[\)}"
+    with_var_line_regex = re.compile(dollar_var_pattern)
+    with_var_line_match = with_var_line_regex.match(word)
+
 
 
 def get_variable_dict(variable_name, result, options, reverses, is_list=False):
@@ -490,6 +500,40 @@ def list_analyzer(match_args_line, result, options, reverses):
     return
 
 
+def project_analyzer(match_args_line, result, options, reverses):
+    var_dict = result.get("variables", dict())
+    words = capture_util.split_line(match_args_line)
+    if len(words) == 0:
+        raise capture_util.ParserError("Unable to analyze project command args_line: ' %s '" % match_args_line)
+
+    # TODO: May be we can get other project config here
+    project_name = words[0]
+    value_dict = var_dict.get("CMAKE_SOURCE_DIR", dict())
+    var_dict["{}_SOURCE_DIR".format(project_name.upper())] = value_dict
+    var_dict["PROJECT_SOURCE_DIR"] = value_dict
+    value_dict = var_dict.get("CMAKE_BINARY_DIR", dict())
+    var_dict["{}_BINARY_DIR".format(project_name.upper())] = value_dict
+    var_dict["PROJECT_BINARY_DIR"] = value_dict
+    return
+
+
+def add_subdirectory_analyzer(match_args_line, result, options, reverses):
+    # Don't care about options status, just append all directories.
+    var_dict = result.get("variables", dict())
+    subdirectory_list = result.get("subdirectories", list())
+    words = capture_util.split_line(match_args_line)
+    if len(words) == 0:
+        raise capture_util.ParserError("add_subdirectory command analyze fail. args_line: '%s'" % match_args_line)
+
+    subdirectory_name = words[0]
+    value_dict = var_dict.get("CMAKE_SOURCE_DIR", dict())
+    value = get_defined_value(value_dict)
+    sub_path = os.path.join(value, subdirectory_name)
+    if os.path.exists(sub_path):
+        subdirectory_list.append(sub_path)
+    return
+
+
 # 2. option control
 level_options = []
 
@@ -686,7 +730,15 @@ def set_target_properties_analyzer(match_args_line, result, options, reverses):
                 # If not found target or target is not append by us, we will not add it to targets.
                 logger.warning("Not found target: %s in output_target." % words[idx])
             else:
-                targets.append(words[idx])
+                match = re.match("\${(.*?)}", words[idx])
+                value = words[idx]
+                if match:
+                    name = match.group(1)
+                    value_dict = var_dict.get(name, dict())
+                    tmp_value = get_defined_value(value_dict)
+                    if tmp_value is not None:
+                        value = tmp_value
+                targets.append(value)
             idx += 1
 
         idx += 1
@@ -741,21 +793,49 @@ def transform_makefile_inc_analyzer(match_args_line, result, options, reverses):
     if len(words) != 2:
         logger.warning("Can't analyze transform_makefile_inc(%s)" % match_args_line)
         return
-    src = words[0]
-    des = words[1]
-    value_with_quote_match = re.match(r"\"([^\\\"]*)\"", src, flags=re.DOTALL)
-    if value_with_quote_match:
-        src = value_with_quote_match.group(1)
-    else:
-        src = src
-    # TODO: 可以调用 autotools.py 里面的解析方法
-    pass
+    src = capture_util.strip_quotes(words[0])
+    des = capture_util.strip_quotes(words[1])
+    src_slices = capture_util.undefined_split(src, var_dict)
+    des_slices = capture_util.undefined_split(des,var_dict)
+    # If transform_makefile_inc value can't be strip out, we will not build it.
+    if check_undefined(src_slices) or check_undefined(des_slices):
+        return
+
+    for value in (src, des):
+        value_with_quote_match = re.match(r"\"([^\\\"]*)\"", value, flags=re.DOTALL)
+        if value_with_quote_match:
+            if value == src:
+                src = value_with_quote_match.group(1)
+            else:
+                # Here will don't need to generate output file .cmake, just directly loading makefile.inc data
+                # to var_dict
+                des = value_with_quote_match.group(1)
+
+    if not os.path.isabs(src):
+        value_dict = var_dict.get("CMAKE_CURRENT_SOURCE_DIR", dict())
+        value = get_defined_value(value_dict)
+        if value is not None:
+            src = os.path.join(value, src)
+
+    src_base_name = os.path.basename(src)
+    src_base_name_pattern = get_command_name_pattern("makefile.inc", with_lparen=False)
+    if re.match(src_base_name_pattern, src_base_name):
+        value_dict = var_dict.get("CMAKE_SOURCE_DIR", dict())
+        value = get_defined_value(value_dict)
+        value_dict = var_dict.get("CMAKE_BINARY_DIR", dict())
+        build_value = get_defined_value(value_dict)
+        if value is not None and build_value is not None and os.path.exists(src):
+            build_path = os.path.dirname(build_value)
+            auto_tools_parser = parse_autotools.AutoToolsParser(value, build_path)
+            auto_tools_parser.loading_include(var_dict, src, options, reverses)
 
 
 # add target
+# TODO: target 解析存在问题， 1.对于没有显示写入的目标（变量），缺少获取值
+# 2. 没有解析source部分, 应该可以做一个简单的source解析
 def add_library_analyzer(match_args_line, result, options, reverses):
     var_dict = result.get("variables", dict())
-    target_dict = result.get("targets", dict())
+    target_dict = result.get("target", dict())
     words = capture_util.split_line(match_args_line)
     if words == 0:
         logger.warning("Add Lib target fail.")
@@ -765,17 +845,16 @@ def add_library_analyzer(match_args_line, result, options, reverses):
     words = words[1:]
     variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)", flags=re.DOTALL)
     variable_match = variable_regex.match(match_args_line)
-    match = re.match("${(.*?)}", target_name)
+    match = re.match("\${(.*?)}", target_name)
     if match:
         # lib name may be use ${}
         name = match.group(1)
-        if name in var_dict:
-            value_dict = var_dict.get(name, dict())
-            if len(value_dict.get("option", dict())) == 0 and \
-                len(value_dict.get("undefined", list())) == 0:
-                defined = value_dict.get("defined", list())
-                value = " ".join(defined)
-                target_list.append(value)
+
+        value_dict = var_dict.get(name, dict())
+        value = get_defined_value(value_dict)
+        if value is not None:
+            target_list.append(value)
+
     elif not variable_match:
         logger.warning("Lib target name strip fail.")
         return
@@ -795,7 +874,7 @@ def add_library_analyzer(match_args_line, result, options, reverses):
 
 def add_executable_analyzer(match_args_line, result, options, reverses):
     var_dict = result.get("variables", dict())
-    target_dict = result.get("targets", dict())
+    target_dict = result.get("target", dict())
     words = capture_util.split_line(match_args_line)
     if words == 0:
         logger.warning("Add Executable target fail.")
@@ -805,16 +884,15 @@ def add_executable_analyzer(match_args_line, result, options, reverses):
     words = words[1:]
     variable_regex = re.compile("\s*(" + var_pattern + ")\s+(.*)", flags=re.DOTALL)
     variable_match = variable_regex.match(match_args_line)
-    match = re.match("${(.*?)}", target_name)
+    match = re.match("\${(.*?)}", target_name)
     if match:
         name = match.group(1)
-        if name in var_dict:
-            value_dict = var_dict.get(name, dict())
-            if len(value_dict.get("option", dict())) == 0 and \
-                    len(value_dict.get("undefined", list())) == 0:
-                defined = value_dict.get("defined", list())
-                value = " ".join(defined)
-                target_list.append(value)
+
+        value_dict = var_dict.get(name, dict())
+        value = get_defined_value(value_dict)
+        if value is not None:
+            target_list.append(value)
+
     elif not variable_match:
         logger.warning("Executable target name strip fail.")
         return
@@ -850,6 +928,7 @@ def set_property_analyzer(match_args_line, result, options, reverses):
         to_delete_idx.sort(reverse=True)
 
         if scopename == "TARGET":
+            words[idx] = "PROPERTIES"
             [words.pop(i) for i in to_delete_idx]
             words.pop(0)
             target_match_args_line = " ".join(words)
@@ -888,6 +967,7 @@ def get_next_rparen(s):
 
 def get_cmake_command(s, cmake_path, result):
     """A generator to analysis cmake commands from CMakeLists.txt"""
+    # TODO: May be we need to statistic the present checking line and lexer position, in order to print logger.
     var_dict = result.get("variables", dict())
     present_str = s
     if len(present_str) == 0:
@@ -947,6 +1027,7 @@ def get_cmake_command(s, cmake_path, result):
                     continue
                 module_paths_str = " ".join(cmake_module_path.get("defined", list()))
                 module_paths = module_paths_str.split(";")
+                module_paths = filter(lambda path: len(path) != 0, module_paths)
                 data = ""
                 for module_path in module_paths:
                     if not os.path.isabs(module_path):
@@ -990,14 +1071,15 @@ def get_cmake_command(s, cmake_path, result):
         present_str = present_str.lstrip(" \t\n")
 
 
-def get_command_name_pattern(name):
+def get_command_name_pattern(name, with_lparen=True):
     pattern_name = r""
     for i in name:
         if re.match("[a-zA-Z]", i):
             pattern_name += r"[{}{}]".format(i.lower(), i.upper())
         else:
             pattern_name += i
-    pattern_name += r"\("
+    if with_lparen:
+        pattern_name += r"\("
     return pattern_name
 
 

@@ -96,8 +96,10 @@ def undefined_split(line, info_dict=None):
         other = with_var_line_match.group(3 + match_chose)
         if undefine_var in info_dict:
             value = info_dict[undefine_var]
-            if len(value["undefined"]) == 0 and value["option"] is None:
-                undefine_var = " ".join(value["defined"]) if len(value["defined"]) != 0 else ""
+            option = value.get("option", dict())
+            option = dict() if option is None else option
+            if len(value.get("undefined", list())) == 0 and len(option) == 0:
+                undefine_var = " ".join(value.get("defined", list())) if len(value.get("defined", list())) != 0 else ""
                 line = line + undefine_var + other
             elif value["option"] is None:
                 slices.append(other)

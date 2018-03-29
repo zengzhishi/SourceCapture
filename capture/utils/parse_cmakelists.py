@@ -12,6 +12,7 @@ import os
 import sys
 import re
 import copy
+import queue
 import logging
 
 if __name__ == "__main__":
@@ -62,9 +63,7 @@ class CMakeParser(object):
     __sample_result = {
         "variables": dict(),
         "list_variables": dict(),
-        "target": {
-            "libcurl": dict()
-        },
+        "target": dict(),
         # Use to storage set_property scope variables, except target scope
         "scope_target": dict(),
         # global definitions， can be passed to subdirecotries
@@ -87,7 +86,9 @@ class CMakeParser(object):
             "is_replace": False,        # always False
         },
         # This field is used to storage option config for generating config.h file.
-        "config_option": dict()
+        "config_option": dict(),
+        # Although subdirectory can be appended when under options, we just loading all of them to analyze.
+        "subdirectories": list(),
     }
     cmake_commands = [
         "set",
@@ -104,6 +105,9 @@ class CMakeParser(object):
         "target_include_directories",
         "add_definitions",
         "include_directories",
+        "transform_makefile_inc",
+        "project",
+        "add_subdirectory",
     ]
 
     def __init__(self, project_path, output_path, build_path=None):
@@ -124,7 +128,7 @@ class CMakeParser(object):
         command_pattern = "|".join(command_name_patterns)
         self.command_regex = re.compile(command_pattern)
 
-    def _add_default_value(self, cmakelist_path):
+    def _add_default_value(self, cmakelist_path, parent_info=None):
         """
             This function will add some default value for cmake analyzer, like
             CMAKE_SOURCE_PATH, CMAKE_BINARY_PATH, CMAKE_MODULE_PATH and etc.
@@ -132,19 +136,31 @@ class CMakeParser(object):
             TODO: 1. add default CMAKE_MODULE_PATH,
                   2. add CMAKE compiler and linker variables.
         """
-        self._cmake_info[cmakelist_path] = copy.deepcopy(self.__sample_result)
-        cmake_current_path = os.path.dirname(cmakelist_path)
-        if not os.path.isabs(cmake_current_path):
-            cmake_current_path = os.path.join(self._project_path, cmake_current_path)
-        cmake_binary_current_path = get_relative_build_path(cmake_current_path, self._project_path,
-                                                            self._build_path)
-        one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
-        var_dict = one_cmake_info.get("variables", dict())
 
-        add_defined_value(var_dict, "CMAKE_SOURCE_DIR", self._project_path, list(), list())
-        add_defined_value(var_dict, "CMAKE_CURRENT_SOURCE_DIR", cmake_current_path, list(), list())
-        add_defined_value(var_dict, "CMAKE_BINARY_DIR", self._build_path, list(), list())
-        add_defined_value(var_dict, "CMAKE_CURRENT_BINARY_DIR", cmake_binary_current_path, list(), list())
+        if parent_info is None:
+            self._cmake_info[cmakelist_path] = copy.deepcopy(self.__sample_result)
+            cmake_current_path = os.path.dirname(cmakelist_path)
+            if not os.path.isabs(cmake_current_path):
+                cmake_current_path = os.path.join(self._project_path, cmake_current_path)
+            cmake_binary_current_path = get_relative_build_path(cmake_current_path, self._project_path,
+                                                                self._build_path)
+            one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
+            var_dict = one_cmake_info.get("variables", dict())
+
+            add_defined_value(var_dict, "CMAKE_SOURCE_DIR", self._project_path, list(), list())
+            add_defined_value(var_dict, "CMAKE_CURRENT_SOURCE_DIR", cmake_current_path, list(), list())
+            add_defined_value(var_dict, "CMAKE_BINARY_DIR", self._build_path, list(), list())
+            add_defined_value(var_dict, "CMAKE_CURRENT_BINARY_DIR", cmake_binary_current_path, list(), list())
+            # add_defined_value(var_dict, "CMAKE_MODULE_PATH", )
+        else:
+            self._cmake_info[cmakelist_path] = copy.deepcopy(parent_info)
+            one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
+            # free local target and subdirectories.
+            one_cmake_info["target"] = dict()
+            one_cmake_info["subdirectories"] = list()
+            # option value should be shared.
+            one_cmake_info["config_option"] = parent_info.get("config_option", dict())
+
         return
 
     def dump_cmake_info(self):
@@ -152,7 +168,30 @@ class CMakeParser(object):
         with open(os.path.join(self._output_path, "cmake_info.json"), "w") as fout:
             json.dump(self._cmake_info, fout, indent=4)
 
-    def loading_cmakelists(self, cmakelist_path):
+    def _match_args_filter(self, match_args_line):
+        """This function is used to do a pre-treatment for the match_args_line."""
+        filter_lines = []
+        double_quote_count = 0
+        double_quote_exclude_count = 0
+        for line in match_args_line.split("\n"):
+            match = re.match("(.*)\s+#(.*)", line)
+            if match:
+                left_line = match.group(1)
+                double_quote_count += len(re.findall(r'"', left_line))
+                double_quote_exclude_count += len(re.findall(r"\\\"", left_line))
+                if (double_quote_count - double_quote_exclude_count) % 2 != 0:
+                    right_line = match.group(2)
+                    double_quote_count += len(re.findall(r'"', right_line))
+                    double_quote_exclude_count += len(re.findall(r"\\\"", right_line))
+                    filter_lines.append(line)
+                else:
+                    filter_lines.append(left_line)
+            else:
+                filter_lines.append(line)
+
+        return "\n".join(filter_lines)
+
+    def loading_cmakelists(self, cmakelist_path, parent_info=None):
         """Loading CMakeLists.txt or *.cmake files"""
         if not os.path.exists(cmakelist_path):
             return False
@@ -163,7 +202,8 @@ class CMakeParser(object):
         if not os.path.isabs(cmake_path):
             cmake_path = os.path.join(self._project_path, cmake_path)
 
-        one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
+        self._add_default_value(cmakelist_path, parent_info=parent_info)
+        one_cmake_info = self._cmake_info.get(cmakelist_path, dict())
         options = list()
         reverses = list()
         for command_name, args_line in cmake_command_analyzer.get_cmake_command(data, cmake_path, one_cmake_info):
@@ -172,9 +212,52 @@ class CMakeParser(object):
                 # pass commands we don't care about
                 continue
             analyzer = cmake_command_analyzer.get_command_analyzer(command_name)
-            analyzer(args_line, one_cmake_info, options, reverses)
-        logger.info("Stop analyzing CMakeLists: %s." % cmakelist_path)
+            filter_args_line = self._match_args_filter(args_line)
+            analyzer(filter_args_line, one_cmake_info, options, reverses)
+        logger.info("Complete analyzing CMakeLists: %s." % cmakelist_path)
         return
+
+    def loading_project_cmakelists(self):
+        top_level_cmakelists = os.path.join(self._project_path, "CMakeLists.txt")
+        if not os.path.exists(top_level_cmakelists):
+            logger.warning("Not found %s, stop cmake project analysis." % top_level_cmakelists)
+
+        cmakelists_queue = queue.Queue()
+        cmakelists_queue.put((top_level_cmakelists, None))
+        is_empty = False
+        while not is_empty:
+            try:
+                (filename, parent_info) = cmakelists_queue.get(block=False)
+            except queue.Empty:
+                is_empty = True
+                continue
+            try:
+                self.loading_cmakelists(filename, parent_info)
+                one_cmake_info = self._cmake_info.get(filename, dict())
+                subdirectories = one_cmake_info.get("subdirectories", list())
+                [cmakelists_queue.put((os.path.join(subdirectory, "CMakeLists.txt"), one_cmake_info)) \
+                 for subdirectory in subdirectories]
+            except capture_util.ParserError:
+                logger.warning("%s analysis fail!" % filename)
+
+        logger.info("Complete project analysis.")
+        return
+
+    def dump_config_h(self):
+        """If there is a config.h file need to generate, it will be serialized here."""
+        pass
+
+    def build_cmake_target(self):
+        """Generate all target of the defined source and undefined source."""
+        pass
+
+    def try_build_target(self, cmake_file_path, files=None, c_compiler="cc", cxx_compiler="g++"):
+        """Attempt to use compiler flags to compile a case, if it pass, we can use the present macros flags."""
+        pass
+
+    def try_build_all_cmake_target(self, c_compiler="cc", cxx_compiler="g++"):
+        """Iteratively determining all target flags, and also define flags for left source files."""
+        pass
 
 
 if __name__ == "__main__":
