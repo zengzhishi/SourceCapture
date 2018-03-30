@@ -128,7 +128,6 @@ def check_variable(word):
     with_var_line_match = with_var_line_regex.match(word)
 
 
-
 def get_variable_dict(variable_name, result, options, reverses, is_list=False):
     var_dict = result.get("variables", dict())
     list_var_dict = result.get("list_variables", dict())
@@ -147,7 +146,7 @@ def get_variable_dict(variable_name, result, options, reverses, is_list=False):
             list_var_dict[variable_name] = {
                 "items": [],
                 "option": {},
-                "is_replace": False
+                "is_replace": True,
             }
         value_list_dict = list_var_dict.get(variable_name, dict())
         option_dict = get_option_level(value_list_dict, options, reverses, is_list=True)
@@ -318,6 +317,7 @@ def set_analyzer(match_args_line, result, options, reverses):
 
 
 def list_analyzer(match_args_line, result, options, reverses):
+    variable_dict = result.get("variables", dict())
     words = capture_util.split_line(match_args_line)
     if len(words) < 2:
         raise capture_util.ParserError("List command contend analyze error! [%s]" % match_args_line)
@@ -395,7 +395,7 @@ def list_analyzer(match_args_line, result, options, reverses):
                     value = temp
 
                 # TODO: Here we just replace a simple single value var, ignore list var replaces.
-                slices = capture_util.undefined_split(value, var_dict)
+                slices = capture_util.undefined_split(value, variable_dict)
                 transfer_word = "".join(slices)
 
                 if check_undefined(slices, with_ac_var=False):
@@ -409,43 +409,40 @@ def list_analyzer(match_args_line, result, options, reverses):
     def list_insert(args):
         if len(args) < 2:
             raise capture_util.ParserError("List INSERT action analysis error!")
-        if var_list_dict.get("is_replace", False):
-            idx = args[0]
-            elems = args[1:]
-            items = var_list_dict.get("items", list())
-            new_items =  items[:idx]
-            for elem in elems:
-                var_dict = {
-                    "defined": [],
-                    "undefined": []
-                }
+        try:
+            idx = int(args[0])
+        except TypeError:
+            raise capture_util.ParserError("List INSERT action args error!")
+        elems = args[1:]
+        items = var_list_dict.get("items", list())
+        for elem in elems:
+            var_dict = {
+                "defined": [],
+                "undefined": []
+            }
+            temp = ""
+            values = capture_util.split_line(elem)
+            for (i, word) in enumerate(values):
+                temp = temp + " " + word if temp else word
+                if i != len(values) - 1 and word in filename_flags and values[i + 1][0] != '-':
+                    continue
+
+                value_with_quote_match = re.match(r"\"([^\\\"])\"", temp, flags=re.DOTALL)
+                if value_with_quote_match:
+                    value = value_with_quote_match.group(1)
+                else:
+                    value = word
+
+                # TODO: Here we just replace a simple single value var, ignore list var replaces.
+                slices = capture_util.undefined_split(value, variable_dict)
+                transfer_word = "".join(slices)
+
+                if check_undefined(slices, with_ac_var=False):
+                    var_dict["undefined"].append(transfer_word)
+                else:
+                    var_dict["defined"].append(transfer_word)
                 temp = ""
-                values = capture_util.split_line(elem)
-                for (i, word) in enumerate(values):
-                    temp = temp + " " + word if temp else word
-                    if i != len(values) - 1 and word in filename_flags and values[i + 1][0] != '-':
-                        continue
-
-                    value_with_quote_match = re.match(r"\"([^\\\"])\"", temp, flags=re.DOTALL)
-                    if value_with_quote_match:
-                        value = value_with_quote_match.group(1)
-                    else:
-                        value = word
-
-                    # TODO: Here we just replace a simple single value var, ignore list var replaces.
-                    slices = capture_util.undefined_split(value, var_dict)
-                    transfer_word = "".join(slices)
-
-                    if check_undefined(slices, with_ac_var=False):
-                        var_dict["undefined"].append(transfer_word)
-                    else:
-                        var_dict["defined"].append(transfer_word)
-                    temp = ""
-                new_items.append(var_dict)
-            new_items.extend(items[idx:])
-            var_list_dict["items"] = new_items
-        else:
-            pass
+            items.insert(idx, var_dict)
         return
 
     def list_remove_item(args):
@@ -509,10 +506,10 @@ def project_analyzer(match_args_line, result, options, reverses):
     # TODO: May be we can get other project config here
     project_name = words[0]
     value_dict = var_dict.get("CMAKE_SOURCE_DIR", dict())
-    var_dict["{}_SOURCE_DIR".format(project_name.upper())] = value_dict
+    var_dict["{}_SOURCE_DIR".format(project_name)] = value_dict
     var_dict["PROJECT_SOURCE_DIR"] = value_dict
     value_dict = var_dict.get("CMAKE_BINARY_DIR", dict())
-    var_dict["{}_BINARY_DIR".format(project_name.upper())] = value_dict
+    var_dict["{}_BINARY_DIR".format(project_name)] = value_dict
     var_dict["PROJECT_BINARY_DIR"] = value_dict
     return
 
@@ -726,18 +723,18 @@ def set_target_properties_analyzer(match_args_line, result, options, reverses):
     try:
         while words[idx] != "PROPERTIES":
             # TODO: 还存在一个严重的问题，如果target的名称也是一个变量，那么做起来就很麻烦了。。。,可以考虑直接使用变量来存储key了。。。
-            if words[idx] not in target_dict:
+            match = re.match("\${(.*?)}", words[idx])
+            value = words[idx]
+            if match:
+                name = match.group(1)
+                value_dict = var_dict.get(name, dict())
+                tmp_value = get_defined_value(value_dict)
+                if tmp_value is not None:
+                    value = tmp_value
+            if value not in target_dict:
                 # If not found target or target is not append by us, we will not add it to targets.
                 logger.warning("Not found target: %s in output_target." % words[idx])
             else:
-                match = re.match("\${(.*?)}", words[idx])
-                value = words[idx]
-                if match:
-                    name = match.group(1)
-                    value_dict = var_dict.get(name, dict())
-                    tmp_value = get_defined_value(value_dict)
-                    if tmp_value is not None:
-                        value = tmp_value
                 targets.append(value)
             idx += 1
 
@@ -853,6 +850,7 @@ def add_library_analyzer(match_args_line, result, options, reverses):
         value_dict = var_dict.get(name, dict())
         value = get_defined_value(value_dict)
         if value is not None:
+            target_list.pop()
             target_list.append(value)
 
     elif not variable_match:
@@ -867,6 +865,7 @@ def add_library_analyzer(match_args_line, result, options, reverses):
     # sources 暂时不处理
     for target_name in target_list:
         target_dict[target_name] = dict()
+        target_dict[target_name]["target_type"] = "lib"
         if library_type is not None:
             target_dict[target_name]["TYPE"] = library_type
     return
@@ -891,6 +890,7 @@ def add_executable_analyzer(match_args_line, result, options, reverses):
         value_dict = var_dict.get(name, dict())
         value = get_defined_value(value_dict)
         if value is not None:
+            target_list.pop()
             target_list.append(value)
 
     elif not variable_match:
@@ -900,6 +900,7 @@ def add_executable_analyzer(match_args_line, result, options, reverses):
     # sources 暂时不处理
     for target_name in target_list:
         target_dict[target_name] = dict()
+        target_dict[target_name]["target_type"] = "executable"
     return
 
 
@@ -1039,7 +1040,7 @@ def get_cmake_command(s, cmake_path, result):
                             data = fin.read()
                         break
                 if len(data) == 0:
-                    logger.warning("Not found cmake module.")
+                    logger.warning("Not found cmake module: %s." % dest)
                 data += present_str
                 present_str = data
         elif command_match:

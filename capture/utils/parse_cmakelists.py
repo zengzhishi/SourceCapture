@@ -136,14 +136,14 @@ class CMakeParser(object):
             TODO: 1. add default CMAKE_MODULE_PATH,
                   2. add CMAKE compiler and linker variables.
         """
+        cmake_current_path = os.path.dirname(cmakelist_path)
+        cmake_binary_current_path = get_relative_build_path(cmake_current_path, self._project_path,
+                                                            self._build_path)
 
         if parent_info is None:
             self._cmake_info[cmakelist_path] = copy.deepcopy(self.__sample_result)
-            cmake_current_path = os.path.dirname(cmakelist_path)
             if not os.path.isabs(cmake_current_path):
                 cmake_current_path = os.path.join(self._project_path, cmake_current_path)
-            cmake_binary_current_path = get_relative_build_path(cmake_current_path, self._project_path,
-                                                                self._build_path)
             one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
             var_dict = one_cmake_info.get("variables", dict())
 
@@ -155,11 +155,15 @@ class CMakeParser(object):
         else:
             self._cmake_info[cmakelist_path] = copy.deepcopy(parent_info)
             one_cmake_info = self._cmake_info.get(cmakelist_path, self.__sample_result)
+            var_dict = one_cmake_info.get("variables", dict())
             # free local target and subdirectories.
             one_cmake_info["target"] = dict()
             one_cmake_info["subdirectories"] = list()
             # option value should be shared.
             one_cmake_info["config_option"] = parent_info.get("config_option", dict())
+
+            var_dict["CMAKE_CURRENT_SOURCE_DIR"]["defined"][0] = cmake_current_path
+            var_dict["CMAKE_CURRENT_BINARY_DIR"]["defined"][0] = cmake_binary_current_path
 
         return
 
@@ -247,9 +251,16 @@ class CMakeParser(object):
         """If there is a config.h file need to generate, it will be serialized here."""
         pass
 
-    def build_cmake_target(self):
+    def build_cmake_target(self, cmakelist_path, one_cmake_info):
+        for target_key, target in one_cmake_info.get("target", dict()).items():
+            var_key_match = re.match("\${(.*?)}", target_key)
+
+
+    def build_all_cmake_target(self):
         """Generate all target of the defined source and undefined source."""
-        pass
+        for (cmakelist_path, one_cmake_info) in self._cmake_info.items():
+            self.build_cmake_target(cmakelist_path, one_cmake_info)
+        return
 
     def try_build_target(self, cmake_file_path, files=None, c_compiler="cc", cxx_compiler="g++"):
         """Attempt to use compiler flags to compile a case, if it pass, we can use the present macros flags."""
