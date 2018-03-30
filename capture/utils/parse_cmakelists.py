@@ -309,7 +309,7 @@ def get_variable_value_with_option(variable, result, option_dict, var_place="var
     else:
         variable_dict = result
 
-    logger.info("# Start check value: %s" % variable)
+    logger.debug("# Start check value: %s" % variable)
     if variable not in variable_dict:
         yield [""]
         return
@@ -317,14 +317,13 @@ def get_variable_value_with_option(variable, result, option_dict, var_place="var
     undefineds = option_dict.get("undefined", list())
     defineds = option_dict.get("defined", list())
     options = option_dict.get("option", dict())
-    print(option_dict)
 
     if len(options) != 0:
         for final_var_tuple in option_builder(option_dict):
             final_var_dict = merge_option(option_dict, dict())
             for opt, level in final_var_tuple:
                 final_var_dict = merge_option(opt, final_var_dict)
-            logger.info("final_var_dict: %s" % final_var_dict)
+            logger.debug("final_var_dict: %s" % final_var_dict)
             undefineds = final_var_dict.get("undefined", list())
             defineds = final_var_dict.get("defined", list())
 
@@ -568,6 +567,7 @@ class CMakeParser(object):
         # 3. Loading target properties.
         # TODO: If we can specify sources, we can build it by target, but now we just use all target properties.
         for target_key, target in one_cmake_info.get("target", dict()).items():
+            logger.debug("///"*20 + target_key + "///" * 20)
             target_definitions_list = []
             target_flags_list = []
             if "COMPILE_DEFINITIONS" in target:
@@ -622,11 +622,20 @@ class CMakeParser(object):
                 continue
 
             all_definitions = []
-            for global_definitions in global_definitions_list:
-                for target_definitions in target_definitions_list:
-                    all_definitions.append(global_definitions + target_definitions)
+            if len(global_definitions_list) == 0 and len(target_definitions_list) == 0:
+                all_definitions.append([""])
+            elif len(global_definitions_list) == 0:
+                all_definitions.extend(target_definitions_list)
+            elif len(target_definitions_list) == 0:
+                all_definitions.extend(global_definitions_list)
+            else:
+                for global_definitions in global_definitions_list:
+                    for target_definitions in target_definitions_list:
+                        all_definitions.append(global_definitions + target_definitions)
 
             all_flags = []
+            if len(target_flags_list) == 0:
+                all_flags.append(global_flags if len(global_flags) != 0 else [""])
             for target_flags in target_flags_list:
                 all_flags.append(target_flags + global_flags)
 
@@ -634,11 +643,9 @@ class CMakeParser(object):
             cxx_compiler_status = False
             for definitions in all_definitions:
                 for flags in all_flags:
+                    definitions = list(filter(lambda x: len(x) != 0, definitions))
+                    flags = list(filter(lambda x: len(x) != 0, flags))
                     for compiler_type in ("C", "CXX"):
-                        print("Mark ---- -- - - -- - ")
-                        print(definitions)
-                        print(flags)
-                        print("Mark2 ---- -- - - -- - ")
                         compiler = self.c_compiler if compiler_type == "C" else self.cxx_compiler
                         case = c_case if compiler_type == "C" else cxx_case
                         flags_type = "c_flags" if compiler_type == "C" else "cxx_flags"
@@ -649,6 +656,7 @@ class CMakeParser(object):
                             else:
                                 cxx_compiler_status = True
                             continue
+                        # filter empty fields
                         definition_line = " ".join(map("-D{}".format, definitions))
                         flag_line = " ".join(flags)
                         cmd = "{} -c {} -o {} {} {} {}".format(
