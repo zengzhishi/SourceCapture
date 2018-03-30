@@ -284,7 +284,7 @@ class AutoToolsParser(object):
             if len(target.get("files", list())) != 0:
                 files = target.get("files", list())
                 # Avoid unknown list contains list problem
-                move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and g(y) or [y]))
+                move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and move_to_top(y) or [y]))
                 files = list(move_to_top(files))
                 for file_line in files:
                     sub_files = re.split(r"\s+", file_line)

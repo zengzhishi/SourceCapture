@@ -627,7 +627,8 @@ def add_definitions_analyzer(match_args_line, result, options, reverses):
     option_definitions_dict = get_option_level(definitions_dict, options, reverses)
     words = capture_util.split_line(match_args_line)
     for (i, word) in enumerate(words):
-        value = word.replace("/D", "-D")
+        value = word.replace("-D", "")
+        value = value.replace("/D", "")
         slices = capture_util.undefined_split(value, var_dict)
         transfer_word = "".join(slices)
         if check_undefined(slices, with_ac_var=False):
