@@ -505,6 +505,12 @@ class CaptureBuilder(object):
                                                             self.__output_path, self.__prefers, self.__build_path)
             source_infos, include_files, files_count = cmake_analyzer.get_project_infos()
 
+        if self.__build_type == "cmakelist":
+            if not self.__build_path:
+                self.__build_path = os.path.join(self.__output_path, "build")
+
+            cmake_analyzer = source_detective.CMakeListAnalyzer(self.__root_path,)
+
         elif self.__build_type == "autotools":
             if not self.__build_path:
                 self.__build_path = self.__root_path
@@ -582,7 +588,7 @@ class CaptureBuilder(object):
             if status:
                 self.__build_path = build_path
                 self.__build_type = "cmake"
-                logger.info("Build cmake environment succes!")
+                logger.info("Build cmake environment success!")
                 return
 
             # checking & building autotools
@@ -591,7 +597,7 @@ class CaptureBuilder(object):
             if status:
                 self.__build_path = build_path
                 self.__build_type = "make"
-                logger.info("Build configure environment succes!")
+                logger.info("Build configure environment success!")
                 return
 
             # checking & building Makefile
@@ -603,7 +609,15 @@ class CaptureBuilder(object):
                 logger.info("Makefile exist!")
                 return
 
-            logger.info("Building Makefile fail; Checking autotools ac, am and m4 files.")
+            logger.info("Building Makefile fail; Checking cmakelist analysis.")
+            status, build_path = source_detective.using_cmakelist(self.__root_path)
+            if status:
+                self.__build_path = self.__root_path
+                self.__build_type = "cmakelist"
+                logger.info("CMakeLists.txt exist!")
+                return
+
+            logger.info("Checking CMakeLists.txt fail; Checking autotools ac, am and m4 files.")
             status, build_path = source_detective.using_autotools(self.__root_path)
             if status:
                 self.__build_path = self.__root_path
@@ -716,7 +730,7 @@ def main():
 
     parser.add_argument("-t", "--build_type",
                         nargs="?",
-                        choices=["make", "cmake", "autotools", "scons", "other"],
+                        choices=["make", "cmake", "autotools", "scons", "cmakelist", "other"],
                         default="other",
                         help="The building type of project you choose.")
 
@@ -786,7 +800,7 @@ def main():
     logger.info("all files: %d, all includes: %d" % (files_count, len(include_files)))
 
     # If using such build type, the last two source_infos are default items, we default not building them.
-    if capture_builder.build_type in ["cmake", "make", "scons", "autotools"]:
+    if capture_builder.build_type in ["cmake", "make", "scons", "autotools", "cmakelist"]:
         result, bc_result = capture_builder.command_prebuild(source_infos[:-2], generate_bitcode, files_count)
     else:
         result, bc_result = capture_builder.command_prebuild(source_infos, generate_bitcode, files_count)
@@ -808,6 +822,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # import capture.utils.parse_cmakelists as parse_cmakelists
+    #
+    # if len(sys.argv) == 2:
+    #     project_path = sys.argv[1]
+    # else:
+    #     sys.stderr.write("Error, without project.\n")
+    #     sys.exit(-1)
+    #
+    # output_path = os.path.abspath("./result")
+    # logger_path = os.path.join(output_path, "capture.log")
+    # parse_logger.addFileHandler(logger_path, "capture")
+    #
+    # cmake_parser = parse_cmakelists.CMakeParser(project_path, output_path)
+    # # cmake_parser.loading_cmakelists(filename)
+    # result_info = cmake_parser.get_project_analysis_result()
+    # print(result_info)
+    # cmake_parser.dump_cmake_info()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

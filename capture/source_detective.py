@@ -96,6 +96,13 @@ def using_cmake(path, output_path, cmake_build_args=""):
     return False, None
 
 
+def using_cmakelist(path):
+    filename = os.path.join(path, "CMakeLists.txt")
+    if not os.path.exists(filename):
+        return False, None
+    return True, path
+
+
 def check_cmake(path, project_path, cmake_build_path):
     """
     Checking whether there is exist CMakeLists.txt
@@ -667,3 +674,7 @@ class AutoToolsAnalyzer(Analyzer):
         result.append(undefined_cxx_info)
         return result, files_h, len(files_s)
 
+
+class CMakeListAnalyzer(Analyzer):
+    def get_project_infos_cmakelist(self):
+        pass

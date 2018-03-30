@@ -688,13 +688,37 @@ class CMakeParser(object):
             self.build_cmake_target(cmakelist_path, one_cmake_info)
         return
 
-    def try_build_target(self, cmake_file_path, files=None, c_compiler="cc", cxx_compiler="g++"):
-        """Attempt to use compiler flags to compile a case, if it pass, we can use the present macros flags."""
-        pass
+    def get_project_analysis_result(self, save_info=True):
+        self.loading_project_cmakelists()
+        self.build_all_cmake_target()
+        if save_info:
+            self.dump_cmake_info()
+        analysis_cmake_result = []
+        for cmakelists_name in self._cmake_info:
+            one_cmake_info = self._cmake_info.get(cmakelists_name, dict())
+            if len(one_cmake_info) == 0: continue
+            targets = one_cmake_info.get("target", dict())
+            if len(targets) == 0: continue
 
-    def try_build_all_cmake_target(self, c_compiler="cc", cxx_compiler="g++"):
-        """Iteratively determining all target flags, and also define flags for left source files."""
-        pass
+            for target_key, target in targets.items():
+                for type in ["C", "CXX"]:
+                    flag_name = "c_flags" if type == "C" else "cxx_flags"
+                    file_name = "c_files" if type == "C" else "cxx_files"
+                    type_flags = target.get(flag_name, dict())
+                    type_files = target.get(file_name, list())
+                    type_target = {
+                        "compiler_type": type,
+                        "source_files": type_files,
+                        "exec_directory": self._project_path,
+                        "flags": type_flags.get("flags", list()),
+                        "definitions": type_flags.get("definitions", list()),
+                        "includes": type_flags.get("includes", list()),
+                        # Maybe will use them.
+                        "custom_flags": [],
+                        "custom_definitions": [],
+                    }
+                    analysis_cmake_result.append(type_target)
+        return analysis_cmake_result
 
 
 if __name__ == "__main__":
