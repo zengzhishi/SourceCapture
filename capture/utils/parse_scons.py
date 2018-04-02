@@ -10,8 +10,8 @@
 """
 
 import os
-import subprocess
 import re
+import copy
 import capture.utils.parse_make as parse_make
 import capture.utils.capture_util as capture_util
 import logging
@@ -59,7 +59,7 @@ def check_sconstruct_exist(build_path):
     return os.path.exists(build_file)
 
 
-def create_command_infos(build_path, output, verbose_list, build_args=""):
+def create_command_infos(build_path, output, origin_verbose_list, build_args=""):
     is_exist = check_sconstruct_exist(build_path)
     if not is_exist:
         logger.warning("There is no SConstruct in %s" % build_path)
@@ -67,11 +67,13 @@ def create_command_infos(build_path, output, verbose_list, build_args=""):
 
     has_verbose = False
     outlines = None
+
+    verbose_list = copy.copy(origin_verbose_list)
+    for value in ("1", "True", "true", "TRUE", "ON", "on"):
+        verbose_list += list(map(lambda verbose: "{}={}".format(verbose, value), origin_verbose_list))
+
     for verbose in verbose_list:
-        if verbose.find("=") != -1:
-            cmd = "scons -n {} {}".format(build_args, verbose)
-        else:
-            cmd = "scons -n {} {}=1".format(build_args, verbose)
+        cmd = "scons -n {} {}".format(build_args, verbose)
         (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_path)
 
         if check_command_format(out):
@@ -79,6 +81,7 @@ def create_command_infos(build_path, output, verbose_list, build_args=""):
             outlines = out.decode("utf-8")
             break
         logger.info("scons verbose name [%s] check fail." % verbose)
+        logger.debug("SCons Build fail info: %s" % out)
 
     if has_verbose:
         output.write(outlines)
