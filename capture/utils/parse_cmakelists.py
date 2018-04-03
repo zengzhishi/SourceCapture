@@ -346,6 +346,31 @@ def get_variable_value_with_option(variable, result, option_dict, var_place="var
                 yield copy_defineds
 
 
+def subdirectories_exclude_walks(abs_dest_path, subdirectories):
+    if not os.path.isabs(abs_dest_path):
+        return
+
+    q = queue.Queue()
+    q.put("")
+    files = []
+    abs_sub_path_set = set(map(lambda subdirectory: os.path.join(abs_dest_path, subdirectory), subdirectories))
+    while not q.empty():
+        try:
+            path = q.get(block=False)
+        except queue.Empty:
+            continue
+
+        abs_path = os.path.join(abs_dest_path, path)
+        for file_name in os.listdir(abs_path):
+            abs_file_path = os.path.join(abs_path, file_name)
+            if os.path.isfile(abs_file_path):
+                files.append(os.path.join(path, file_name))
+            elif os.path.isdir(abs_file_path) and abs_file_path not in abs_sub_path_set:
+                    q.put(os.path.join(path, file_name))
+
+    return files
+
+
 class CMakeParser(object):
     __sample_result = {
         "variables": dict(),
@@ -374,6 +399,8 @@ class CMakeParser(object):
         },
         # This field is used to storage option config for generating config.h file.
         "config_option": dict(),
+        "config_h_input": None,
+        "config_h_output": None,
         # Although subdirectory can be appended when under options, we just loading all of them to analyze.
         "subdirectories": list(),
     }
@@ -395,6 +422,7 @@ class CMakeParser(object):
         "transform_makefile_inc",
         "project",
         "add_subdirectory",
+        "configure_file",
     ]
 
     def __init__(self, project_path, output_path, build_path=None, c_compiler="cc", cxx_compiler="g++"):
@@ -515,6 +543,7 @@ class CMakeParser(object):
         top_level_cmakelists = os.path.join(self._project_path, "CMakeLists.txt")
         if not os.path.exists(top_level_cmakelists):
             logger.warning("Not found %s, stop cmake project analysis." % top_level_cmakelists)
+            return
 
         cmakelists_queue = queue.Queue()
         cmakelists_queue.put((top_level_cmakelists, None))
@@ -537,9 +566,84 @@ class CMakeParser(object):
         logger.info("Complete project analysis.")
         return
 
-    def dump_config_h(self):
+    def dump_all_config_h(self):
+        for one_cmake_info in self._cmake_info.values():
+            self.dump_config_h(one_cmake_info)
+        return
+
+    def dump_config_h(self, present_cmake_info):
         """If there is a config.h file need to generate, it will be serialized here."""
-        pass
+        top_level_cmakelists = os.path.join(self._project_path, "CMakeLists.txt")
+        top_cmake_info = self._cmake_info.get(top_level_cmakelists, dict())
+
+        if not os.path.exists(top_level_cmakelists):
+            logger.warning("Not found %s, stop cmake config.h dumping." % top_level_cmakelists)
+            return
+
+        # 1. Loading option config
+        variables_dict = present_cmake_info.get("variables", dict())
+        config_option_dict = present_cmake_info.get("config_option", dict())
+        transfer_config_options = {}
+        for (key, value_dict) in config_option_dict.items():
+            value = cmake_command_analyzer.get_defined_value(value_dict)
+            if value is None:
+                value = "OFF"
+            transfer_config_options[key] = True if value == "ON" else False
+
+        # 2. Get name of config.h and where to dump.
+        config_h_input = present_cmake_info.get("config_h_input", None)
+        config_h_output = present_cmake_info.get("config_h_output", None)
+
+        if config_h_input is None or config_h_output is None:
+            logger.debug("Not found useful configure_file config, exit dumping process.")
+            return
+
+        # 3. Loading config.h.cmake to define all macros.(whether we need to do) and Dumping data base on option config.
+        if not os.path.exists(config_h_input):
+            logger.warning("Not found file %s, exit dumping process." % config_h_input)
+            return
+
+        try:
+            if not os.path.exists(os.path.dirname(config_h_output)):
+                os.makedirs(os.path.dirname(config_h_output))
+        except OSError:
+            logger.warning("Couldn't create folder: %s" % os.path.dirname(config_h_output))
+            return
+        f_config_h_out = open(config_h_output, "w")
+
+        for (macros_line, comment) in cmake_command_analyzer.get_config_h_cmake_options(config_h_input):
+            words = capture_util.split_line(macros_line)
+            if len(words) == 1:
+                macros_name = words[0]
+                macros_value = "1"
+            elif len(words) == 2:
+                macros_name = words[0]
+                macros_value = words[1]
+            else:
+                logger.warning("cmakedefine line error: '%s'" % macros_line)
+                continue
+
+            f_config_h_out.write("/* {} */\n".format(comment))
+
+            if not transfer_config_options.get(macros_name, False):
+                f_config_h_out.write("/* #undef {} */\n\n".format(macros_name))
+                continue
+
+            status, var_name = cmake_command_analyzer.check_one_undefined_slice(macros_value, with_ac_var=True)
+            if status:
+                var_dict = variables_dict.get(var_name, dict())
+                value = cmake_command_analyzer.get_defined_value(var_dict)
+                if value is None:
+                    value = ""
+                macros_value = value
+
+            f_config_h_out.write("#define {} {}\n\n".format(macros_name, macros_value))
+
+        # 4. del
+        f_config_h_out.flush()
+        f_config_h_out.close()
+        logger.info("Generating %s success." % config_h_output)
+        return
 
     def build_cmake_target(self, cmakelist_path, one_cmake_info):
         dir_name = os.path.dirname(cmakelist_path)
@@ -587,11 +691,7 @@ class CMakeParser(object):
                 move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and move_to_top(y) or [y]))
                 files = list(move_to_top(files))
             else:
-                files = []
-                for file_name in os.listdir(dir_name):
-                    file_path = os.path.join(dir_name, file_name)
-                    if os.path.isfile(file_path):
-                        files.append(file_name)
+                files = subdirectories_exclude_walks(dir_name, one_cmake_info.get("subdirectories", list()))
 
             sub_files = []
             for file_line in files:
@@ -603,6 +703,7 @@ class CMakeParser(object):
                                                          ["cxx", "cpp", "cc"] else False, sub_files)
             target["c_files"] = list(c_files)
             target["cxx_files"] = list(cxx_files)
+            target["exec_directory"] = dir_name
 
             logger.info("# Get case from files.")
             c_case = None
@@ -632,17 +733,22 @@ class CMakeParser(object):
                 for global_definitions in global_definitions_list:
                     for target_definitions in target_definitions_list:
                         all_definitions.append(global_definitions + target_definitions)
+            all_definitions.sort(key=len)
+            print(all_definitions)
 
             all_flags = []
             if len(target_flags_list) == 0:
                 all_flags.append(global_flags if len(global_flags) != 0 else [""])
             for target_flags in target_flags_list:
                 all_flags.append(target_flags + global_flags)
+            all_flags.sort(key=len)
+            print(all_flags)
 
             c_compiler_status = False
             cxx_compiler_status = False
             for definitions in all_definitions:
                 for flags in all_flags:
+                    print(definitions, flags)
                     definitions = list(filter(lambda x: len(x) != 0, definitions))
                     flags = list(filter(lambda x: len(x) != 0, flags))
                     for compiler_type in ("C", "CXX"):
@@ -663,20 +769,23 @@ class CMakeParser(object):
                             compiler, os.path.join(dir_name, case), os.path.join(self._build_path, c_case + ".o"),
                             global_includes_line, definition_line, flag_line
                         )
-                        logger.debug(cmd)
+                        logger.info(cmd)
                         (returncode, out, err) = capture_util.subproces_calling(cmd, dir_name)
                         if returncode == 0:
                             logger.info("Try compile for target: %s success." % target_key)
-                            target[flags_type] = {
-                                "definitions": definitions,
-                                "includes": global_includes,
-                                "flags": flags,
-                            }
-                            target["directory"] = dir_name
                             if compiler_type == "C":
+                                save_status = False if c_compiler_status else True
                                 c_compiler_status = True
                             else:
+                                save_status = False if cxx_compiler_status else True
                                 cxx_compiler_status = True
+                            if save_status:
+                                target["directory"] = dir_name
+                                target[flags_type] = {
+                                    "definitions": definitions,
+                                    "includes": global_includes,
+                                    "flags": flags,
+                                }
                     if c_compiler_status and cxx_compiler_status:
                         break
                 if c_compiler_status and cxx_compiler_status:
@@ -690,6 +799,7 @@ class CMakeParser(object):
 
     def get_project_analysis_result(self, save_info=True):
         self.loading_project_cmakelists()
+        self.dump_all_config_h()
         self.build_all_cmake_target()
         if save_info:
             self.dump_cmake_info()
@@ -706,10 +816,12 @@ class CMakeParser(object):
                     file_name = "c_files" if type == "C" else "cxx_files"
                     type_flags = target.get(flag_name, dict())
                     type_files = target.get(file_name, list())
+                    exec_directory = target.get("exec_directory", self._project_path)
+                    type_files = list(map(lambda filepath: os.path.join(exec_directory, filepath), type_files))
                     type_target = {
                         "compiler_type": type,
                         "source_files": type_files,
-                        "exec_directory": self._project_path,
+                        "exec_directory": exec_directory,
                         "flags": type_flags.get("flags", list()),
                         "definitions": type_flags.get("definitions", list()),
                         "includes": type_flags.get("includes", list()),

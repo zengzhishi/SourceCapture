@@ -29,21 +29,23 @@ logger = logging.getLogger("capture")
 
 
 def check_one_undefined_slice(slice, with_ac_var=False):
-    undefined_pattern = r"\$[a-zA-Z_][a-zA-Z0-9_]*|\$[\{\(][a-zA-Z_][a-zA-Z0-9_]*[\)\}]"
-    undefined_at_pattern = r"\@[a-zA-Z_][a-zA-Z0-9_]*\@"
+    undefined_pattern = r"\$[\{\(]([a-zA-Z_][a-zA-Z0-9_]*)[\)\}]"
+    undefined_at_pattern = r"\@([a-zA-Z_][a-zA-Z0-9_]*)\@"
     if with_ac_var:
         undefined_pattern = undefined_pattern + r"|" + undefined_at_pattern
 
     undefined_regex = re.compile(undefined_pattern)
-
-    if undefined_regex.search(slice):
-        return True
+    match = undefined_regex.search(slice)
+    if match:
+        return True, match.group(1) if match.group(1) is not None else match.group(2)
+    return False, None
 
 
 def check_undefined(slices, with_ac_var=False):
     """Checking whether slices has undefined variables."""
     for slice in slices:
-        if check_one_undefined_slice(slice, with_ac_var):
+        status, value = check_one_undefined_slice(slice, with_ac_var)
+        if status:
             return True
     return False
 
@@ -710,8 +712,31 @@ def option_analyzer(match_args_line, result, options, reverses):
 
 
 def configure_file_analyzer(match_args_line, result, options, reverses):
-    # TODO: 只提取最终生成 .h文件就可以, 其他的太麻烦了
-    pass
+    var_dict = result.get("variables", dict())
+
+    value_dict = var_dict.get("CMAKE_CURRENT_SOURCE_DIR", dict())
+    value = get_defined_value(value_dict)
+    if value is None:
+        value = "."
+
+    words = capture_util.split_line(match_args_line)
+    if len(words) < 2:
+        raise capture_util.ParserError("command configure_file(%s) analysis error." % match_args_line)
+
+    # If we can't get a defined value of input & output file name, stop analyzing.
+    input_slices = capture_util.undefined_split(words[0].strip(), var_dict)
+    if check_undefined(input_slices):
+        return
+    input = "".join(input_slices)
+    output_slices = capture_util.undefined_split(words[1].strip(), var_dict)
+    if check_undefined(output_slices):
+        return
+    output = "".join(output_slices)
+
+    # If not match these suffix, we will not recognize them as option_config files.
+    if re.match(r".*\.h\.cmake$", input) and re.match(r".*\.h$", output):
+        result["config_h_input"] = os.path.join(value, input) if not os.path.isabs(input) else input
+        result["config_h_output"] = os.path.join(value, output) if not os.path.isabs(output) else output
 
 
 # other config command
@@ -1071,6 +1096,38 @@ def get_cmake_command(s, cmake_path, result):
             present_str = present_str[i:]
 
         present_str = present_str.lstrip(" \t\n")
+
+
+def get_config_h_cmake_options(config_h_input):
+    """
+    A generator to get config.h.cmake option one by one.
+
+    :param config_h_input:              .h.cmake file path.
+    :return:
+        define_line
+        comment
+    """
+
+    with open(config_h_input, "r") as fin:
+        data = fin.read()
+
+    last_comment = ""
+    data = data.lstrip(" \n\t")
+    while len(data) != 0:
+        comment_match = re.match(r"/\*\s+(.*?)\s+\*/(.*)", data, flags=re.DOTALL)
+        macros_match = re.match(r"#cmakedefine\s+(.*?)\n(.*)", data, flags=re.DOTALL)
+        if comment_match:
+            last_comment = comment_match.group(1)
+            data = comment_match.group(2)
+        elif macros_match:
+            line = macros_match.group(1)
+            data = macros_match.group(2)
+            yield (line, last_comment)
+        else:
+            next_index = data.find("\n")
+            data = data[next_index:]
+            logger.warning("Unconcerned line recognize, skip it.")
+        data = data.lstrip(" \n\t")
 
 
 def get_command_name_pattern(name, with_lparen=True):

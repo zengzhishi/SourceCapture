@@ -12,6 +12,7 @@ import capture.utils.parse_cmake as parse_cmake
 import capture.utils.parse_make as parse_make
 import capture.utils.parse_scons as parse_scons
 import capture.utils.parse_autotools as parse_autotools
+import capture.utils.parse_cmakelists as parse_cmakelists
 
 import capture.utils.capture_util as capture_util
 
@@ -677,4 +678,26 @@ class AutoToolsAnalyzer(Analyzer):
 
 class CMakeListAnalyzer(Analyzer):
     def get_project_infos_cmakelist(self):
-        pass
+        paths, files_s, files_h = self.get_project_infos()
+
+        cmake_parser = parse_cmakelists.CMakeParser(self._project_path, self._output_path)
+        result_info = cmake_parser.get_project_analysis_result()
+        cmake_parser.dump_cmake_info()
+
+        undefined_c_info = {
+            "source_files": [],
+            "flags": [],
+            "definitions": [],
+            "includes": paths,
+            "exec_directory": self._project_path,
+            "compiler_type": "C",
+            "custom_flags": [],
+            "custom_definitions": [],
+        }
+        undefined_cxx_info = copy.deepcopy(undefined_c_info)
+        undefined_cxx_info["compiler_type"] = "CXX"
+        undefined_cxx_info["flags"] = DEFAULT_CXX_FLAGS
+        result_info.append(undefined_c_info)
+        result_info.append(undefined_cxx_info)
+        return result_info, files_h, len(files_s)
+

@@ -509,7 +509,9 @@ class CaptureBuilder(object):
             if not self.__build_path:
                 self.__build_path = os.path.join(self.__output_path, "build")
 
-            cmake_analyzer = source_detective.CMakeListAnalyzer(self.__root_path,)
+            cmakelists_analyzer = source_detective.CMakeListAnalyzer(self.__root_path,
+                                                                self.__output_path, self.__prefers, self.__build_path)
+            source_infos, include_files, files_count = cmakelists_analyzer.get_project_infos_cmakelist()
 
         elif self.__build_type == "autotools":
             if not self.__build_path:
@@ -822,23 +824,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # import capture.utils.parse_cmakelists as parse_cmakelists
-    #
-    # if len(sys.argv) == 2:
-    #     project_path = sys.argv[1]
-    # else:
-    #     sys.stderr.write("Error, without project.\n")
-    #     sys.exit(-1)
-    #
-    # output_path = os.path.abspath("./result")
-    # logger_path = os.path.join(output_path, "capture.log")
-    # parse_logger.addFileHandler(logger_path, "capture")
-    #
-    # cmake_parser = parse_cmakelists.CMakeParser(project_path, output_path)
-    # # cmake_parser.loading_cmakelists(filename)
-    # result_info = cmake_parser.get_project_analysis_result()
-    # print(result_info)
-    # cmake_parser.dump_cmake_info()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
