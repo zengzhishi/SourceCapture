@@ -18,6 +18,8 @@ import logging
 import copy
 import ply.lex as lex
 import capture.utils.basic_m4_lexer as basic_m4_lexer
+import capture.utils.capture_util as capture_util
+from capture.utils.capture_util import ParserError
 
 if __name__ == "__main__":
     sys.path.append("../conf")
@@ -269,15 +271,6 @@ ac_headers = ""
 
 
 has_macros = False
-
-
-class ParserError(Exception):
-    """Error happen in analyze configure.ac or *.m4 file"""
-    def __init__(self, message=None):
-        if message:
-            self.args = (message,)
-        else:
-            self.args = ("Parser Error happen!",)
 
 
 def check_next(generator, string):
@@ -672,7 +665,7 @@ def macros_line_analyze(line, variables, generator, is_macros_line=False):
         present_option_dict["defined"] = present_option_dict["defined"] if append_match else []
         present_option_dict["undefined"] = present_option_dict["undefined"] if append_match else []
 
-        words = split_line(value)
+        words = capture_util.split_line(value)
         temp = ""
         for (i, word) in enumerate(words):
             temp = temp + " " + word if temp else word
@@ -1386,40 +1379,6 @@ def functions_analyze(generator, filename):
     return functions
 
 
-def split_line(line):
-    # Pass 1: split line using whitespace
-    words = line.strip().split()
-    # Pass 2: merge words so that the no. of quotes is balanced
-    res = []
-    for w in words:
-        if len(res) > 0 and unbalanced_quotes(res[-1]):
-            res[-1] += " " + w
-        else:
-            res.append(w)
-    return res
-
-
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    excute = 0
-    for c in s:
-        if c == "'":
-            single += 1
-        elif c == '"':
-            double += 1
-        if c == "`":
-            excute += 1
-
-    move_double = s.count('\\"')
-    move_single = s.count("\\'")
-    single -= move_single
-    double -= move_double
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
-    return is_half_quote
-
-
 class CacheGenerator(object):
     """
         If we use has_next() to check next token exist, we will not meet StopIteration exception.
@@ -1510,6 +1469,25 @@ class CacheGenerator(object):
         else:
             if 0 <= lineno < len(self._origin_lines) and 0 < end < len(self._origin_lines):
                 return self._origin_lines[lineno, end]
+
+
+class M4Analyzer(object):
+    options = list()
+    reverses = list()
+    functions = dict()
+    m4_libs = dict()
+    config_h = dict()
+    to_config = list()
+    ac_headers = ""
+
+    def __init__(self):
+        pass
+
+    def __del__(self):
+        pass
+
+    def functions_analyze(self, generator, filename):
+        pass
 
 
 if __name__ == "__main__":

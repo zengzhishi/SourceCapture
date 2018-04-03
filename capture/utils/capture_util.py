@@ -143,7 +143,7 @@ def unbalanced_quotes(s):
             single += 1
         elif c == '"':
             double += 1
-        if c == "`":
+        elif c == "`":
             excute += 1
 
     move_double = s.count('\\"')
@@ -209,6 +209,7 @@ def get_system_path(compiler="gcc", type="c"):
 
 # Analysis Error happen
 class ParserError(Exception):
+    """Error happen in analyze file"""
     def __init__(self, message=None):
         if message:
             self.args = (message,)

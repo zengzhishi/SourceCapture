@@ -191,54 +191,20 @@ def create_command_infos(build_path, output, makefile_name=None,
         return None
 
     if is_exist:
-        cmd = "make -Bnkw {}".format(make_args)
+        cmd = "make -nkw {}".format(make_args)
     else:
-        cmd = "make -Bnkw -f {} {}".format(make_file, make_args)
+        cmd = "make -nkw -f {} {}".format(make_file, make_args)
 
     (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_path)
     output.write(out.decode("utf8"))
     return output
 
 
-def split_cmd_line(line):
-    # Pass 1: split line using whitespace
-    words = line.strip().split()
-    # Pass 2: merge words so that the no. of quotes is balanced
-    res = []
-    for w in words:
-        if len(res) > 0 and unbalanced_quotes(res[-1]):
-            res[-1] += " " + w
-        else:
-            res.append(w)
-    return res
-
-
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    excute = 0
-    for c in s:
-        if c == "'":
-            single += 1
-        elif c == '"':
-            double += 1
-        if c == "`":
-            excute += 1
-
-    # 去除转义后的引号带来的影响
-    move_double = s.count('\\"')
-    move_single = s.count("\\'")
-    single -= move_single
-    double -= move_double
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
-    return is_half_quote
-
-
 def excute_quote_code(s, build_dir):
     s_regax = re.match("`(.*)`(.*)", s)
     excute_cmd = s_regax.group(1)
     (returncode, out, err) = capture_util.subproces_calling(excute_cmd, cwd=build_dir)
+    out = out.decode("utf8")
     value = out.strip("\n") + s_regax.group(2)
     return value
 
@@ -324,7 +290,7 @@ def parse_flags(build_log_in, build_dir,
             continue
 
         arguments = []
-        words = split_cmd_line(line)[1:]
+        words = capture_util.split_line(line)[1:]
         filepath = None
         line_count += 1
 
@@ -343,7 +309,7 @@ def parse_flags(build_log_in, build_dir,
                 # phony target
                 word_strip_quotes = capture_util.strip_quotes(word)
                 if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
-                    quetos_words = split_cmd_line(word_strip_quotes)
+                    quetos_words = capture_util.split_line(word_strip_quotes)
                     if len(quetos_words) > 1:
                         for (i, quetos_word) in enumerate(quetos_words):
                             if quetos_word[i] in filename_flags and quetos_word[1][0] != '-':

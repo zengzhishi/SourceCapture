@@ -18,7 +18,6 @@ logger = logging.getLogger("capture")
 
 
 def strip_quotation(string):
-    print("---------- strip: {} ---------- ".format(string))
     if (string[0] == "\"" and string[-1] == "\"") \
             or (string[0] == "\'" and string[-1] == "\'"):
         return string[1:-1]
@@ -89,46 +88,16 @@ def set_analysis(fin):
     return config
 
 
-def strip_quotes(s):
-    if s[0] == "'" and s[-1] == "'":
-        return s[1:-1]
-    elif s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    else:
-        return s
-
-
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    excute = 0
-    for c in s:
-        if c == "'":
-            single += 1
-        elif c == '"':
-            double += 1
-        if c == "`":
-            excute += 1
-
-    move_double = s.count('\\"')
-    move_single = s.count("\\'")
-    single -= move_single
-    double -= move_double
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
-    return is_half_quote
-
-
 def set_fields_analysis(lines):
     config = {}
     for line in lines:
         fields = re.split(r"\s+", line)
         if len(fields) == 2:
-            config[fields[0]] = strip_quotes(fields[1])
+            config[fields[0]] = capture_util.strip_quotes(fields[1])
         elif len(fields) > 2:
             config[fields[0]] = []
             for field in fields[1:]:
-                if len(config[fields[0]]) > 0 and unbalanced_quotes(config[fields[0]][-1]):
+                if len(config[fields[0]]) > 0 and capture_util.unbalanced_quotes(config[fields[0]][-1]):
                     config[fields[0]][-1] += " " + field
                 else:
                     config[fields[0]].append(field)
@@ -140,7 +109,7 @@ def set_fields_analysis(lines):
                     if field.find("<") != -1:
                         field = field.replace("<", "\\<")
                         field = field.replace(">", "\\>")
-                config[fields[0]][i] = strip_quotes(field)
+                config[fields[0]][i] = capture_util.strip_quotes(field)
         else:
             logger.warning("Analyze set fields: %s fail." % line)
             continue

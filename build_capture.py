@@ -190,15 +190,14 @@ def command_exec_worker(get_item_func):
             logger.warning("Illegal compile_command object: %s" % json.dumps(job_dict))
             continue
 
+        logger.info(" CC Building {}".format(file))
         if out:
-            logger.info(" CC Building {}\n{}".format(file, out.decode("utf-8")))
-        else:
-            logger.info(" CC Building {}".format(file))
+            logger.debug(out.decode("utf-8"))
 
         if returncode != 0:
-            logger.debug("compile: %s fail" % file)
+            logger.info("compile: %s fail" % file)
         else:
-            logger.debug("compile: %s success" % file)
+            logger.info("compile: %s success" % file)
     logger.info("Thread: %s stop." % pool.threading.currentThread().getName())
     return
 

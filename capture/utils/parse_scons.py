@@ -31,6 +31,7 @@ def has_file_s(line):
 
 
 def check_command_format(result, other_cc_compiles=None, other_cxx_compiles=None):
+    """Checking the present subprocess calling output are the correct format we need."""
     cc_re_compile_str = "(.*-?g?cc )|(.*-?clang )"
     if other_cc_compiles:
         for cc_compile in other_cc_compiles:
@@ -60,6 +61,14 @@ def check_sconstruct_exist(build_path):
 
 
 def create_command_infos(build_path, output, origin_verbose_list, build_args=""):
+    """
+    Use try-match to checking which is the useful dry-run verbose.
+    :param build_path:                              project building path.
+    :param output:                                  result and temp data output path.
+    :param origin_verbose_list:                     the origin verbose name list.
+    :param build_args:                              scons command execution arguments.
+    :return:
+    """
     is_exist = check_sconstruct_exist(build_path)
     if not is_exist:
         logger.warning("There is no SConstruct in %s" % build_path)
@@ -69,6 +78,7 @@ def create_command_infos(build_path, output, origin_verbose_list, build_args="")
     outlines = None
 
     verbose_list = copy.copy(origin_verbose_list)
+    # TODO: Move these flag list to config file.
     for value in ("1", "True", "true", "TRUE", "ON", "on"):
         verbose_list += list(map(lambda verbose: "{}={}".format(verbose, value), origin_verbose_list))
 
