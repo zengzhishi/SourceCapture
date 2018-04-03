@@ -540,9 +540,12 @@ class CMakeParser(object):
             if not self.command_regex.match(command_name + "("):
                 # pass commands we don't care about
                 continue
-            analyzer = cmake_command_analyzer.get_command_analyzer(command_name)
-            filter_args_line = self._match_args_filter(args_line)
-            analyzer(filter_args_line, one_cmake_info, options, reverses)
+            try:
+                analyzer = cmake_command_analyzer.get_command_analyzer(command_name)
+                filter_args_line = self._match_args_filter(args_line)
+                analyzer(filter_args_line, one_cmake_info, options, reverses)
+            except capture_util.ParserError:
+                logger.warning("Analyze command: %s(%s) fail." % (command_name, args_line))
         logger.info("Complete analyzing CMakeLists: %s." % cmakelist_path)
         return
 

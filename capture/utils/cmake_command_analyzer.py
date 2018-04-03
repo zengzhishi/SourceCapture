@@ -990,7 +990,7 @@ def set_property_analyzer(match_args_line, result, options, reverses):
 
 
 def check_include_files_analyzer(match_args_line, result, options, reverses):
-    """Checking include files whether is exist."""
+    """Checking include files whether is exist. In most of case, this command will be used in global config."""
     var_dict = result.get("variables", dict())
     list_var_dict = result.get("list_variables", dict())
     config_option_dict = result.get("config_option", dict())
@@ -1227,24 +1227,32 @@ def get_cmake_command(s, cmake_path, result):
             elif command_name == "endfunction":
                 define_function = None
 
-            if define_function is not None and command_name.upper() not in ("FUNCTION", "ENDFUNCTION"):
-                function_dict = cmake_functions.get(define_function, dict())
-                function_dict["commands"].append("{}({})".format(command_name, match_args_line))
-            elif define_macro is not None and command_name.upper() not in ("MACRO", "ENDMACRO"):
-                macro_dict = cmake_macros.get(define_macro, dict())
-                macro_dict["commands"].append("{}({})".format(command_name, match_args_line))
-            # calling function and macros. Don't be affect by defining
-            elif define_macro is None and define_function is None and command_name.upper() in cmake_macros:
-                update_commands_str = update_macro(command_name, match_args_line,
-                                                   cmake_macros.get(command_name.upper(), dict()))
-                present_str = update_commands_str + "\n" + present_str
-            elif define_macro is None and define_function is None and command_name.upper() in cmake_functions:
+            try:
+                if define_function is not None and command_name.upper() not in ("FUNCTION", "ENDFUNCTION"):
+                    function_dict = cmake_functions.get(define_function, dict())
+                    commands = function_dict.get("commands", list())
+                    commands.append("{}({})".format(command_name, match_args_line))
+
+                elif define_macro is not None and command_name.upper() not in ("MACRO", "ENDMACRO"):
+                    macro_dict = cmake_macros.get(define_macro, dict())
+                    commands = macro_dict.get("commands", list())
+                    commands.append("{}({})".format(command_name, match_args_line))
+
+                # calling function and macros. Don't be affect by defining
+                elif define_macro is None and define_function is None and command_name.upper() in cmake_macros:
+                    update_commands_str = update_macro(command_name, match_args_line,
+                                                       cmake_macros.get(command_name.upper(), dict()))
+                    present_str = update_commands_str + "\n" + present_str
+
                 # We have no idea to identify function and macro, so we deal with them on the same method
-                update_commands_str = update_macro(command_name, match_args_line,
-                                                   cmake_functions.get(command_name.upper(), dict()))
-                present_str = update_commands_str + "\n" + present_str
-            else:
-                yield command_name, match_args_line
+                elif define_macro is None and define_function is None and command_name.upper() in cmake_functions:
+                    update_commands_str = update_macro(command_name, match_args_line,
+                                                       cmake_functions.get(command_name.upper(), dict()))
+                    present_str = update_commands_str + "\n" + present_str
+                else:
+                    yield command_name, match_args_line
+            except capture_util.ParserError:
+                logger.warning("update_macro / update_function: [%s] fail." % command_name)
 
         else:
             logger.warning("Command_analysis error happend in line: '%s'" %
