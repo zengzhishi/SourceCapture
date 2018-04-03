@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import logging
+import functools
 
 # import capture_util
 # import parse_autotools
@@ -169,11 +170,21 @@ def get_target_dict(target_property, target, options, reverses):
 
 
 def get_defined_value(option_dict):
-    if len(option_dict.get("option", dict())) == 0 and \
-            len(option_dict.get("undefined", dict())) == 0:
-        defineds = option_dict.get("defined", list())
-        value = " ".join(defineds)
-        return value
+    if "items" not in option_dict:
+        if len(option_dict.get("option", dict())) == 0 and \
+                len(option_dict.get("undefined", dict())) == 0:
+            defineds = option_dict.get("defined", list())
+            value = " ".join(defineds)
+            return value
+    else:
+        if len(option_dict.get("option", dict())) == 0:
+            values = []
+            for i in option_dict.get("items", list()):
+                ivalue = i.get("defined", "")
+                if len(ivalue) != 0:
+                    values.append(ivalue)
+            value = ";".join(values)
+            return value
     return None
 
 
@@ -978,6 +989,66 @@ def set_property_analyzer(match_args_line, result, options, reverses):
     return
 
 
+def check_include_files_analyzer(match_args_line, result, options, reverses):
+    """Checking include files whether is exist."""
+    var_dict = result.get("variables", dict())
+    list_var_dict = result.get("list_variables", dict())
+    config_option_dict = result.get("config_option", dict())
+
+    words = capture_util.split_line(match_args_line)
+    if len(words) < 2:
+        raise capture_util.ParserError("check_include_file( %s ) parse error!" % match_args_line)
+
+    args1_list = []
+    for arg in words[:-1]:
+        args1_list.append(capture_util.strip_quotes(arg))
+    args1 = ";".join(args1_list)
+
+    output_variable = capture_util.strip_quotes(words[-1])
+    slices = capture_util.undefined_split(args1, var_dict)
+    transfer_slices = []
+    for slice in slices:
+        status, arg_name = check_one_undefined_slice(slice)
+        if not status:
+            transfer_slices.append(slice)
+        else:
+            if arg_name in list_var_dict:
+                value = get_defined_value(list_var_dict.get(arg_name, dict()))
+                if value is not None:
+                    transfer_slices.append(value)
+    transfer_args1 = "".join(transfer_slices)
+    includes = transfer_args1.split(";")
+
+    cstatus, system_c_path = capture_util.get_system_path()
+    cxxstatus, system_cxx_path = capture_util.get_system_path(type="c++")
+    system_path = list(set(system_c_path).union(set(system_cxx_path)))
+
+    def __check_exist(include):
+        for dir in system_path:
+            include_path = os.path.join(dir, capture_util.strip_quotes(include))
+            if os.path.exists(include_path):
+                return True
+        return False
+
+    includes = filter(lambda include: len(include) != 0, includes)
+    result_status = list(map(__check_exist, includes))
+    final_status = functools.reduce(lambda x, y: x and y, result_status)
+    if output_variable not in config_option_dict:
+        config_option_dict[output_variable] = {
+            "defined": list(),
+            "undefined": list(),
+            "option": dict(),
+            "is_replace": True,
+        }
+    config_option_dict[output_variable]["defined"] = ["ON"] if final_status else ["OFF"]
+    return
+
+
+def check_include_file_analyzer(match_args_line, result, options, reverses):
+    check_include_files_analyzer(match_args_line, result, options, reverses)
+    pass
+
+
 def not_found_analyzer(match_args_line, result, options, reverses):
     logger.warning("Not found analyzer for such command")
     return
@@ -992,10 +1063,58 @@ def get_next_rparen(s):
     return ""
 
 
+def get_cmake_macros_args(s):
+    """Analyze cmake macros/functions command, and return its args and name."""
+    words = capture_util.split_line(s)
+    if len(words) < 1:
+        raise capture_util.ParserError("CMake macro/function define command args error! '%s'" % s)
+
+    macro_name = words[0]
+    args = words[1:]
+    return (macro_name, args)
+
+
+def update_macro(command_name, match_args_line, info_dict):
+    """
+    Update function data under macro info_list
+    :param command_name:
+    :param match_args_line:
+    :param info_dict:                           A dict to storage command under one macro.
+    :return:
+    """
+    format_args = info_dict.get("args", list())
+    real_args = capture_util.split_line(match_args_line)
+    if len(real_args) < len(format_args):
+        raise capture_util.ParserError("macro[ %s ] args not match!" % command_name)
+
+    commands = info_dict.get("commands", list())
+    output_commands = []
+    for command in commands:
+        replaced_command = command
+        for arg, real_arg in zip(format_args, real_args[:len(format_args)]):
+            replaced_command = replaced_command.replace("${%s}" % arg, real_arg)
+        output_commands.append(replaced_command)
+
+    # Add ARGN to functions.
+    if len(real_args) > len(format_args):
+        argn_command = "SET(ARGN, %s)" % " ".format(real_args[len(format_args):])
+    else:
+        argn_command = "SET(ARGN)"
+
+    output_commands.insert(0, argn_command)
+
+    return "\n".join(output_commands)
+
+
 def get_cmake_command(s, cmake_path, result):
     """A generator to analysis cmake commands from CMakeLists.txt"""
     # TODO: May be we need to statistic the present checking line and lexer position, in order to print logger.
     var_dict = result.get("variables", dict())
+    cmake_macros = result.get("cmake_macros", dict())
+    cmake_functions = result.get("cmake_functions", dict())
+    define_function = None
+    define_macro = None
+
     present_str = s
     if len(present_str) == 0:
         return
@@ -1088,7 +1207,45 @@ def get_cmake_command(s, cmake_path, result):
                 lparen_count = len(re.findall("\(", match_args_line))
                 rparen_count = len(re.findall("\)", match_args_line))
                 present_str = present_str[len(next_str) + 1:]
-            yield command_name, match_args_line
+
+            if command_name.upper() == "MACRO":
+                name, args = get_cmake_macros_args(match_args_line)
+                define_macro = name.upper()
+                cmake_macros[define_macro] = {
+                    "args": args,
+                    "commands": list(),
+                }
+            elif command_name.upper() == "FUNCTION":
+                name, args = get_cmake_macros_args(match_args_line)
+                define_function = name.upper()
+                cmake_functions[define_function] = {
+                    "args": args,
+                    "commands": list(),
+                }
+            elif command_name == "endmacro":
+                define_macro = None
+            elif command_name == "endfunction":
+                define_function = None
+
+            if define_function is not None and command_name.upper() not in ("FUNCTION", "ENDFUNCTION"):
+                function_dict = cmake_functions.get(define_function, dict())
+                function_dict["commands"].append("{}({})".format(command_name, match_args_line))
+            elif define_macro is not None and command_name.upper() not in ("MACRO", "ENDMACRO"):
+                macro_dict = cmake_macros.get(define_macro, dict())
+                macro_dict["commands"].append("{}({})".format(command_name, match_args_line))
+            # calling function and macros. Don't be affect by defining
+            elif define_macro is None and define_function is None and command_name.upper() in cmake_macros:
+                update_commands_str = update_macro(command_name, match_args_line,
+                                                   cmake_macros.get(command_name.upper(), dict()))
+                present_str = update_commands_str + "\n" + present_str
+            elif define_macro is None and define_function is None and command_name.upper() in cmake_functions:
+                # We have no idea to identify function and macro, so we deal with them on the same method
+                update_commands_str = update_macro(command_name, match_args_line,
+                                                   cmake_functions.get(command_name.upper(), dict()))
+                present_str = update_commands_str + "\n" + present_str
+            else:
+                yield command_name, match_args_line
+
         else:
             logger.warning("Command_analysis error happend in line: '%s'" %
                            present_str.split("\n")[0])
@@ -1146,7 +1303,7 @@ def get_command_analyzer(name):
     # TODO: Need to add default function when no analyzer in this module
     current_module = sys.modules[__name__]
     analyzer_funcname = "{}_analyzer".format(name.lower())
-    return getattr(current_module, analyzer_funcname)
+    return getattr(current_module, analyzer_funcname, not_found_analyzer)
 
 
 if __name__ == "__main__":

@@ -40,25 +40,6 @@ include_file_suffix = set(config.get("Default", "include_suffix").split(","))
 VERBOSE_LIST = config.get("SCons", "verbose").split(',')
 
 
-def get_system_path(compiler):
-    """
-    Acquire GCC system headers path
-    """
-    # Checking c system headers
-    cmd = "echo 'main(){}' | " + compiler + " -E -x c -v -"
-    # Checking c++ system headers
-    cpp_cmd = """echo 'main(){}' | gcc -E -x c++ -v -"""
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    retval = p.wait()
-    lines = []
-    for line in p.stdout.readlines():
-        lines.append(line.strip())
-    if retval == 0:
-        return lines, True
-    else:
-        return lines, False
-
-
 def get_directions(path):
     paths = []
     for one in os.listdir(path):

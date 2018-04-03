@@ -9,6 +9,7 @@
     @Note:
 """
 
+import os
 import subprocess
 import logging
 import re
@@ -174,6 +175,36 @@ def strip_quotes(s):
         return s[1:-1]
     else:
         return s
+
+
+def get_system_path(compiler="gcc", type="c"):
+    """
+    Acquire default compiler system headers path
+    """
+    # Checking system headers
+    cmd = "echo | %s -E -v -x %s -" % (compiler, type)
+    returncode, out, err = subproces_calling(cmd)
+    lines = []
+    out = out.decode("utf8")
+    outlines = out.split("\n")
+    outlines.reverse()
+    try:
+        line = outlines.pop()
+        while not re.match("#include <...> search starts here:", line):
+            line = outlines.pop()
+
+        line = outlines.pop()
+        while not re.match("End of search list", line):
+            lines.append(line.strip())
+            line = outlines.pop()
+    except IndexError:
+        logger.debug("Stop checking.")
+
+    if returncode == 0:
+        return True, lines
+    else:
+        logger.debug("Get system headers path fail.")
+        return False, lines
 
 
 # Analysis Error happen

@@ -403,6 +403,9 @@ class CMakeParser(object):
         "config_h_output": None,
         # Although subdirectory can be appended when under options, we just loading all of them to analyze.
         "subdirectories": list(),
+        # These fields will be used to storage cmake macros and functions.
+        "cmake_macros": dict(),
+        "cmake_functions": dict(),
     }
     cmake_commands = [
         "set",
@@ -423,6 +426,8 @@ class CMakeParser(object):
         "project",
         "add_subdirectory",
         "configure_file",
+        "check_include_files",
+        "check_include_file",
     ]
 
     def __init__(self, project_path, output_path, build_path=None, c_compiler="cc", cxx_compiler="g++"):
@@ -479,6 +484,8 @@ class CMakeParser(object):
             one_cmake_info["subdirectories"] = list()
             # option value should be shared.
             one_cmake_info["config_option"] = parent_info.get("config_option", dict())
+            one_cmake_info["cmake_macros"] = parent_info.get("cmake_macros", dict())
+            one_cmake_info["cmake_functions"] = parent_info.get("cmake_functions", dict())
 
             var_dict["CMAKE_CURRENT_SOURCE_DIR"]["defined"][0] = cmake_current_path
             var_dict["CMAKE_CURRENT_BINARY_DIR"]["defined"][0] = cmake_binary_current_path
@@ -734,7 +741,6 @@ class CMakeParser(object):
                     for target_definitions in target_definitions_list:
                         all_definitions.append(global_definitions + target_definitions)
             all_definitions.sort(key=len)
-            print(all_definitions)
 
             all_flags = []
             if len(target_flags_list) == 0:
@@ -742,13 +748,11 @@ class CMakeParser(object):
             for target_flags in target_flags_list:
                 all_flags.append(target_flags + global_flags)
             all_flags.sort(key=len)
-            print(all_flags)
 
             c_compiler_status = False
             cxx_compiler_status = False
             for definitions in all_definitions:
                 for flags in all_flags:
-                    print(definitions, flags)
                     definitions = list(filter(lambda x: len(x) != 0, definitions))
                     flags = list(filter(lambda x: len(x) != 0, flags))
                     for compiler_type in ("C", "CXX"):
@@ -769,7 +773,7 @@ class CMakeParser(object):
                             compiler, os.path.join(dir_name, case), os.path.join(self._build_path, c_case + ".o"),
                             global_includes_line, definition_line, flag_line
                         )
-                        logger.info(cmd)
+                        logger.debug(cmd)
                         (returncode, out, err) = capture_util.subproces_calling(cmd, dir_name)
                         if returncode == 0:
                             logger.info("Try compile for target: %s success." % target_key)
@@ -790,6 +794,18 @@ class CMakeParser(object):
                         break
                 if c_compiler_status and cxx_compiler_status:
                     break
+            if len(target.get("c_flags", dict())) == 0:
+                target["c_flags"] = {
+                    "definitions": all_definitions[0],
+                    "includes": global_includes,
+                    "flags": all_flags[0]
+                }
+            if len(target.get("cxx_flags", dict())) == 0:
+                target["cxx_flags"] = {
+                    "definitions": all_definitions[0],
+                    "includes": global_includes,
+                    "flags": all_flags[0]
+                }
 
     def build_all_cmake_target(self):
         """Generate all target of the defined source and undefined source."""
