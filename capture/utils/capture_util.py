@@ -207,6 +207,11 @@ def get_system_path(compiler="gcc", type="c"):
         return False, lines
 
 
+def get_system_macros(compiler="gcc", type="c"):
+    """Check system compiler and get some default macros."""
+    pass
+
+
 # Analysis Error happen
 class ParserError(Exception):
     """Error happen in analyze file"""

@@ -1502,6 +1502,102 @@ class CacheGenerator(object):
                 return self._origin_lines[lineno, end]
 
 
+def get_fields(generator):
+    sparen_count = 0
+    quote_count = 0
+    in_quote = False
+    in_double_quote = False
+    try:
+        token = generator.next()
+        # field start with '['
+        if token.type == "LSPAREN":
+            # Left the first SPAREN
+            fields_tokens = [token, ]
+            while token.type == "LSPAREN":
+                sparen_count += 1
+                token = generator.next()
+
+            while sparen_count != 0:
+                # Under string flags, in '...' or "..."
+                if in_quote:
+                    if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                        in_quote = False
+                    fields_tokens.append(token)
+                elif in_double_quote:
+                    if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                        in_double_quote = False
+                    fields_tokens.append(token)
+                # Go into string analysis.
+                elif token.type == "QUOTE":
+                    in_quote = True
+                    fields_tokens.append(token)
+                elif token.type == "QUOTE":
+                    in_double_quote = True
+                    fields_tokens.append(token)
+                # For the outer RSPAREN, will not save it.
+                elif quote_count == 0 and token.type == "RSPAREN":
+                    sparen_count -= 1
+                elif token.type in left:
+                    quote_count += 1
+                    fields_tokens.append(token)
+                elif token.type in right:
+                    quote_count -= 1
+                    fields_tokens.append(token)
+                else:
+                    fields_tokens.append(token)
+                token = generator.next()
+
+            if token.type not in ("COMMA", "RPAREN"):
+                # The command fields has multi command, but without SPAREN to include them
+                fields_tokens.extend(get_fields(generator))
+                token = lex.LexToken()
+                if len(fields_tokens) != 0:
+                    token.lineno = fields_tokens[-1].lineno
+                token.type = "LSPAREN"
+                token.value = "]"
+                fields_tokens.append(token)
+                return fields_tokens
+            else:
+                return fields_tokens
+        # Field not start with "[", the end flags are "," and ")"
+        # But we still need to concerned about the influence of quotes and parens.
+        else:
+            fields_tokens = [token, ]
+            token = generator.next()
+            while quote_count != 0 or in_quote or in_double_quote \
+                    or token.type not in ("COMMA", "RPAREN"):
+                if in_quote:
+                    if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                        in_quote = False
+                    fields_tokens.append(token)
+                elif in_double_quote:
+                    if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                        in_double_quote = False
+                    fields_tokens.append(token)
+                # Go into string analysis.
+                elif token.type == "QUOTE":
+                    in_quote = True
+                    fields_tokens.append(token)
+                elif token.type == "QUOTE":
+                    in_double_quote = True
+                    fields_tokens.append(token)
+                elif token.type in left:
+                    quote_count += 1
+                    fields_tokens.append(token)
+                elif token.type in right:
+                    quote_count -= 1
+                    fields_tokens.append(token)
+                else:
+                    fields_tokens.append(token)
+                token = generator.next()
+
+            generator.seek(generator.index - 1)
+            return fields_tokens
+    except StopIteration:
+        if sparen_count != 0 or quote_count != 0 or in_quote or in_double_quote:
+            raise ParserError
+
+
 class M4Analyzer(object):
     options = list()
     reverses = list()
@@ -1521,9 +1617,95 @@ class M4Analyzer(object):
         pass
 
     def command_analyze(self, generator, analysis_type="default", func_name=None, level=0,
-                        ends=["RSPAREN",], allow_defunc=False, allow_calling=False):
-        pass
+                        ends=["RPAREN", "COMMA"], allow_defunc=False, allow_calling=False):
+        logger.debug("# Calling analyzer with type: %s, in function: %s, present level: %d"
+                     % (analysis_type, func_name, level))
+        if isinstance(func_name, str):
+            logger.debug("Functions should be string type.")
+            return
 
+        if func_name not in self.functions:
+            self.functions[func_name] = {
+                "calling": [],
+                "need_condition_var": [],
+                "need_assign_var": [],
+                "variables": {},
+                "export_variables": {},
+                "export_conditions": {}
+            }
+        dest_functions = self.functions.get(func_name, dict())
+        paren_count = 0
+        in_double_quote = False
+        in_quote = False
+        roll_back_times = 0
+
+        token = generator.next()
+        if analysis_type == "default":
+            while paren_count > 0 or in_double_quote or in_quote or token.type not in ends:
+                if token.type == "ID" and token.value in m4_macros_map:
+                    pass
+        elif analysis_type == "MACROS":
+            # There may be some illegal format like [[...]] or more parens.
+            # SPAREN will be use to contain arguments.
+            sparen_count = 0
+            while token.type == "LSPAREN":
+                sparen_count += 1
+                token = generator.next()
+
+            macros_name = token.value
+            logger.debug("## Start MACROS analysis, macros name: %s" % macros_name)
+
+            while paren_count != 0:
+                token = generator.next()
+                if in_quote or in_double_quote:
+                    # if last_token.type is
+                    pass
+                elif token.type in left:
+                    paren_count += 1
+                elif token.type in right and paren_count != 0:
+                    paren_count -= 1
+                if token.type == "RSPAREN":
+                    sparen_count -= 1
+
+            to_config.clear()
+            try:
+                token = generator.next()
+                if token.type in ["RSPAREN", "COMMA"]:
+                    to_config.append(macros_name)
+                else:
+                    quote_count = 0
+                    while token.type not in ["RSPAREN", "COMMA"] or quote_count != 0:
+                        if token.type in left:
+                            quote_count += 1
+                        elif token.type in right:
+                            quote_count -= 1
+                        token = generator.next()
+            except StopIteration:
+                raise ParserError
+
+
+    def _defined_macros_analyze(self, generator, macro_name, func_name, level):
+        """AC | AM macros we concerned, defined args fields in m4_macros_map."""
+        if macro_name == "AC_DEFUN":
+            logger.debug("## Start defined function analysis.")
+            _check_ac_defunc(generator)
+        elif macro_name in ("AC_DEFINE", "AC_DEFINE_UNQUOTED"):
+            check_next(generator, "LPAREN")
+            option_name = self.command_analyze(generator, analysis_type="MACROS", func_name=func_name, level=level + 1)
+            next_token = generator.next()
+
+            value = "1"
+            if next_token.type == "COMMA":
+                # with default value.
+                value = self.command_analyze(generator, analysis_type="macros_value",
+                                     func_name=func_name, level=level + 1)
+                next_token = generator.next()
+
+            description = ""
+            if next_token.type == "COMMA":
+                description = self.command_analyze(generator, analysis_type="string", func_name=func_name,
+                                     level=level + 1)
+                next_token = generator.next()
 
 
 if __name__ == "__main__":
