@@ -184,15 +184,17 @@ class AutoToolsParser(object):
     def get_project_analysis_result(self, makefile_ams, c_compiler="cc", cxx_compiler="g++", save_infos=True):
         logger.info("Makefile am: %s" % makefile_ams)
         self.load_m4_macros()
+        if save_infos:
+            self.dump_m4_info()
         self.set_configure_ac()
+        if save_infos:
+            self.dump_ac_info()
         self.build_ac_export_infos()
         self.dump_config_h()
         self.set_makefile_am(makefile_ams)
         self.build_autotools_target()
         self.try_build_all_am_target(c_compiler=c_compiler, cxx_compiler=cxx_compiler)
         if save_infos:
-            self.dump_m4_info()
-            self.dump_ac_info()
             self.dump_makefile_am_info()
 
         analysis_autotools_result = []
@@ -213,7 +215,7 @@ class AutoToolsParser(object):
                         "source_files": type_files,
                         "exec_directory": self._project_path,
                         "flags": type_flags.get("flags", list()),
-                        "definitions": type_flags.get("definitions", list()),
+                        "definitions": type_flags.get("macros", list()),
                         "includes": type_flags.get("includes", list()),
                         # Maybe will use them.
                         "custom_flags": [],
@@ -286,6 +288,8 @@ class AutoToolsParser(object):
                 # Avoid unknown list contains list problem
                 move_to_top = lambda x: (z for y in x for z in (isinstance(y, list) and move_to_top(y) or [y]))
                 files = list(move_to_top(files))
+                files_str = " ".join(files)
+                files = files_str.split(" \t\n")
                 for file_line in files:
                     sub_files = re.split(r"\s+", file_line)
                     c_files = filter(lambda file_name: True if file_name.split(".")[-1] == "c" else False,
@@ -295,7 +299,7 @@ class AutoToolsParser(object):
                     target["c_files"] = list(map(lambda file: os.path.join(path, file), c_files))
                     target["cxx_files"] = list(map(lambda file: os.path.join(path, file), cpp_files))
             # Get test case
-            logger.info("#$# Get case from files.")
+            logger.info("## Get case from files.")
             c_case = None
             cxx_case = None
             if "c_files" in target and len(target.get("c_files", list())) != 0:
@@ -324,53 +328,96 @@ class AutoToolsParser(object):
                 c_compiler_status = False
                 cxx_compiler_status = False
                 sorted_cppsorted_flags = sort_flags_line(cppsorted_flags)
+
+                flags_dict = target.get("flags", dict())
+                c_flags_line = flags_dict.get("CFLAGS", [""])
+                sorted_c_flags = sort_flags_line(c_flags_line)
+
+                cxx_flags_line = flags_dict.get("CXXFLAGS", [""])
+                sorted_cxx_flags = sort_flags_line(cxx_flags_line)
+
+                final_c_flags_lines = []
+                final_cxx_flags_lines = []
                 for lines in sorted_cppsorted_flags:
-                    logger.info("1. %s" % lines)
                     default_includes, default_macros, default_flags = format_flags(lines, path)
-                    # Autotools all add
                     default_macros.append("HAVE_CONFIG_H")
 
-                    for flag_name in ["CFLAGS", "CXXFLAGS"]:
-                        flags_line = target["flags"].get(flag_name, [""])
-                        name = "c_flags" if flag_name == "CFLAGS" else "cxx_flags"
-                        case = c_case if flag_name == "CFLAGS" else cxx_case
-                        if case is None:
-                            if flag_name == "CFLAGS":
+                    # Sorted by macros count
+                    if len(sorted_c_flags) == 0:
+                        final_c_flags_lines.append(([], [], []))
+                    for c_lines in sorted_c_flags:
+                        includes, macros, flags = format_flags(c_lines, path)
+                        includes.extend(default_includes)
+                        macros.extend(default_macros)
+                        flags.extend(default_flags)
+                        final_flags_line = (includes, macros, flags)
+                        final_c_flags_lines.append(final_flags_line)
+
+                    if len(sorted_cxx_flags) == 0:
+                        final_cxx_flags_lines.append(([], [], []))
+                    for cxx_lines in sorted_cxx_flags:
+                        includes, macros, flags = format_flags(cxx_lines, path)
+                        includes.extend(default_includes)
+                        macros.extend(default_macros)
+                        flags.extend(default_flags)
+                        final_flags_line = (includes, macros, flags)
+                        final_cxx_flags_lines.append(final_flags_line)
+
+                final_c_flags_lines.sort(key=lambda x: len(x[1]))
+                final_cxx_flags_lines.sort(key=lambda x: len(x[1]))
+                default_cxx_flags = {
+                    "macros": final_cxx_flags_lines[0][1],
+                    "includes": final_cxx_flags_lines[0][0],
+                    "flags": final_cxx_flags_lines[0][2]
+                }
+                default_c_flags = {
+                    "macros": final_c_flags_lines[0][1],
+                    "includes": final_c_flags_lines[0][0],
+                    "flags": final_c_flags_lines[0][2]
+                }
+
+                for flags_type in ("C", "CXX"):
+                    flags_lines = final_c_flags_lines if flags_type == "C" else final_cxx_flags_lines
+                    case = c_case if flags_type == "C" else cxx_case
+                    if case is None and flags_type == "C":
+                        c_compiler_status = True
+                        continue
+                    if case is None and flags_type == "CXX":
+                        cxx_compiler_status = True
+                        continue
+                    compiler = c_compiler if flags_type == "C" else cxx_compiler
+                    flags_type_name = "c_flags" if flags_type == "C" else "cxx_flags"
+
+                    for (includes, macros, flags) in flags_lines:
+                        include_line = " ".join(map("-I{}".format, includes))
+                        macros_line = " ".join(map("-D{}".format, macros))
+                        flags_line = " ".join(flags)
+                        cmd = "{} -c {} -o {} {} {} {}".format(
+                            compiler, case, os.path.join(self._build_path, case + ".o"),
+                            include_line, macros_line, flags_line
+                        )
+                        logger.debug(cmd)
+                        (returncode, out, err) = capture_util.subproces_calling(cmd, path)
+                        if returncode == 0:
+                            logger.info("Try compile for target: %s success." % target_key)
+                            if flags_type == "C":
+                                save_status = False if c_compiler_status else True
                                 c_compiler_status = True
-                            if flag_name == "CXXFLAGS":
+                            else:
+                                save_status = False if cxx_compiler_status else True
                                 cxx_compiler_status = True
-                            continue
-                        compiler = c_compiler if flag_name == "CFLAGS" else cxx_compiler
-                        sorted_flags = sort_flags_line(flags_line)
-                        for line in sorted_flags:
-                            logger.info("2. %s" % line)
-                            includes, macros, flags = format_flags(line, path)
-                            includes.extend(default_includes)
-                            macros.extend(default_macros)
-                            flags.extend(default_flags)
-                            include_line = " ".join(map("-I{}".format, includes))
-                            macros_line = " ".join(map("-D{}".format, macros))
-                            flags_line = " ".join(flags)
-                            cmd = "{} -c {} -o {} {} {} {}".format(
-                                compiler, case, os.path.join(self._build_path, c_case + ".o"),
-                                include_line, macros_line, flags_line
-                            )
-                            logger.info(cmd)
-                            (returncode, out, err) = capture_util.subproces_calling(cmd, path)
-                            if returncode == 0:
-                                logger.info("Try compile for target: %s success." % target_key)
-                                target[name] = {
+
+                            if save_status:
+                                target[flags_type_name] = {
                                     "definitions": macros,
                                     "includes": includes,
                                     "flags": flags,
                                 }
-                                if flag_name == "CFLAGS":
-                                    c_compiler_status = True
-                                if flag_name == "CXXFLAGS":
-                                    cxx_compiler_status = True
-                                break
-                    if c_compiler_status and cxx_compiler_status:
-                        break
+
+                if len(target.get("c_flags", dict())) == 0:
+                    target["c_flags"] = default_c_flags
+                if len(target.get("cxx_flags", dict())) == 0:
+                    target["cxx_flags"] = default_cxx_flags
         return
 
     def try_build_all_am_target(self, c_compiler="cc", cxx_compiler="g++"):
@@ -788,6 +835,8 @@ class AutoToolsParser(object):
         second_queue = queue.Queue()
 
         line = " ".join(var_dict.get("undefined", list()))
+        if len(line) == 0:
+            return
         slices = capture_util.undefined_split(line, am_pair_var)
         first_queue.put(["",])
 

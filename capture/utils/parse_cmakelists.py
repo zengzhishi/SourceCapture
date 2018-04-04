@@ -246,6 +246,8 @@ def undefined_builder(var_dict, result):
     second_queue = queue.Queue()
 
     line = " ".join(var_dict.get("undefined", list()))
+    if len(line) == 0:
+        return
     slices = capture_util.undefined_split(line, variable_dict)
     first_queue.put(["",])
 

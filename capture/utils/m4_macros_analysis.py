@@ -204,16 +204,19 @@ class M4Lexer(object):
             tok = lexer.token()
             if not tok:
                 break
+
             if tok.type == "COMMENT" and last_token.lineno != tok.lineno:
                 # Pass comment line
                 continue
-            elif last_token.lineno == tok.lineno and \
+            elif tok.type == "COMMENT" and last_token.lineno == tok.lineno and \
                     last_token.lexpos + len(last_token.value) == tok.lexpos:
                 # Only the #... are next to other part should be return
                 #TODO: 需要重新分割这部分的 token 使得其能够作为
                 nocoment_lexer = basic_m4_lexer.NoCommentLexer()
                 nocoment_lexer.build()
                 for token in nocoment_lexer.get_token_iter(tok.value):
+                    token.lineno += tok.lineno - 1
+                    token.lexpos += tok.lexpos
                     yield token
                 pass
             elif tok.type != "COMMENT":
@@ -223,10 +226,6 @@ class M4Lexer(object):
 
             last_token = tok
             yield tok
-
-
-
-
 
 
 # TODO: 拓展表格，加入可能会出现的 IFELSE 宏定义函数，这种情况的话应该作为option来处理, 条件解析不出来就直接构建一个随机不重复的条件
@@ -786,7 +785,8 @@ def _calling_to_merge(func_name, funcname_tocall, *args):
         tocall_function = present_function
 
     # Step 1: Merge variables for called function and calling function
-    dest_variables = functions[func_name]["variables"]
+    dest_functions = functions.get(func_name, dict())
+    dest_variables = dest_functions.get("variables", dict())
     variables = tocall_function.get("variables", dict())
     for var in variables:
         if var not in dest_variables:
@@ -855,7 +855,7 @@ def _calling_to_merge(func_name, funcname_tocall, *args):
     # Step 2: Merge export variables
     export_vars_dict = tocall_function.get("export_variables", dict())
     for export_var in export_vars_dict:
-        if "export_variables" not in functions[func_name]:
+        if "export_variables" not in dest_functions:
             functions[func_name]["export_variables"] = dict()
 
         if export_var not in functions[func_name]["export_variables"]:
@@ -893,8 +893,19 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
         logger.debug("Functions can't be None type.")
         return
 
+    if func_name not in functions:
+        functions[func_name] = {
+            "calling": [],
+            "need_condition_var": [],
+            "need_assign_var": [],
+            "variables": {},
+            "export_variables": {},
+            "export_conditions": {}
+        }
+    dest_functions = functions.get(func_name, dict())
+
     logger.debug("# calling analysis with type: " + analysis_type +
-                " In function: " + func_name + "\tlevel:" + str(level))
+                 " In function: " + func_name + "\tlevel:" + str(level))
     global has_macros
     global to_config
     quote_count = 0
@@ -1001,8 +1012,8 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                                                 level=level + 1, allow_calling=allow_calling)
                                 else:
                                     if name == "value" and len(functions[func_name]["need_assign_var"]) != 0:
-                                                                                                                 # Need to remove waiting default value variable.
-                                                                                                                 functions[func_name]["need_assign_var"].pop()
+                                         # Need to remove waiting default value variable.
+                                         functions[func_name]["need_assign_var"].pop()
                                     generator.seek(generator.index - 1)
                                 logger.debug("defined next_token: %s" % next_token)
 
@@ -1081,29 +1092,28 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                             _calling_to_merge(func_name, funcname_tocall)
 
                     else:
-                        lineno = token.lineno
                         if token.type == "ID" and next_token.type in ends:
                             # Directly break
                             token = next_token
-                            break
+                            continue
                         # When start a new line, we should end up this loop.
                         one_word_line = True
                         sub_quotes_count = 0
                         logger.debug("quote count: %d" % sub_quotes_count)
-                        while (token.type not in ends or sub_quotes_count > 0) and \
-                                token.lineno == lineno:
-                            one_word_line = False
-                            if next_token.type in left:
+                        token = next_token
+                        while (token.type not in ends or sub_quotes_count > 0) \
+                                and token.lineno == lineno:
+                            if token.type in left:
                                 sub_quotes_count += 1
-                            if next_token.type in right:
+                            elif token.type in right:
                                 sub_quotes_count -= 1
-                            token = next_token
-                            next_token = generator.next()
-                            logger.debug("quote count: %d" % sub_quotes_count)
-                        logger.debug("Move outer token:%s" % token)
-                        if not one_word_line:
-                            generator.seek(generator.index - 2)
                             token = generator.next()
+                            logger.debug("quote count: %d" % sub_quotes_count)
+
+                        logger.debug("Move outer token: %s" % token)
+                        # if not one_word_line:
+                        #     generator.seek(generator.index - 2)
+                        #     token = generator.next()
                 except StopIteration:
                     raise ParserError
 
@@ -1120,20 +1130,17 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                     one_word_line = True
                     sub_quotes_count = 0
                     logger.debug("quote count: %d" % sub_quotes_count)
-                    while (token.type not in ends or sub_quotes_count > 0) and \
-                            token.lineno == lineno:
-                        one_word_line = False
-                        if next_token.type in left:
+
+                    token = next_token
+                    while (token.type not in ends or sub_quotes_count > 0) \
+                            and token.lineno == lineno:
+                        if token.type in left:
                             sub_quotes_count += 1
-                        if next_token.type in right:
+                        elif token.type in right:
                             sub_quotes_count -= 1
-                        token = next_token
-                        next_token = generator.next()
-                        logger.debug("next_token: %s quote count: %d" % (next_token, sub_quotes_count))
-                    logger.debug("Move outer token:%s" % token)
-                    if not one_word_line:
-                        generator.seek(generator.index - 2)
                         token = generator.next()
+                        logger.debug("quote count: %d" % sub_quotes_count)
+                    logger.debug("Move outer token: %s" % token)
 
                     # Skip part should be added to global quote_count
                     quote_count += sub_quotes_count
@@ -1169,8 +1176,32 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                 logger.debug("## End of case analysis.")
 
             elif token.type in left:
+                logger.debug("## Start quote start line analysis.")
+                lineno = token.lineno
                 quote_count += 1
-                token = generator.next()
+                try:
+                    next_token = generator.next()
+                    if next_token in ends:
+                        token = next_token
+                        break
+
+                    sub_quotes_count = 0
+                    logger.debug("quote count: %d" % sub_quotes_count)
+
+                    token = next_token
+                    while (token.type not in ends or sub_quotes_count > 0) \
+                            and token.lineno == lineno:
+                        if token.type in left:
+                            sub_quotes_count += 1
+                        elif token.type in right:
+                            sub_quotes_count -= 1
+                        token = generator.next()
+                        logger.debug("quote count: %d" % sub_quotes_count)
+                    logger.debug("Move outer token: %s" % token)
+                    quote_count += sub_quotes_count
+                except StopIteration:
+                    raise ParserError
+
             elif token.type in right:
                 quote_count -= 1
                 # logger.debug("/\\ %s %d %s" % (token, quote_count, ends))
@@ -1488,6 +1519,11 @@ class M4Analyzer(object):
 
     def functions_analyze(self, generator, filename):
         pass
+
+    def command_analyze(self, generator, analysis_type="default", func_name=None, level=0,
+                        ends=["RSPAREN",], allow_defunc=False, allow_calling=False):
+        pass
+
 
 
 if __name__ == "__main__":

@@ -650,7 +650,9 @@ class AutoToolsAnalyzer(Analyzer):
 
         # Add config.h path for all info list.
         for info_list in result:
-            info_list["includes"].append(auto_tools_parser.ac_headers)
+            info_list["includes"].append(os.path.dirname(auto_tools_parser.ac_headers))
+
+        files_h.append(auto_tools_parser.ac_headers)
 
         result.append(undefined_c_info)
         result.append(undefined_cxx_info)
