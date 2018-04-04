@@ -1503,6 +1503,13 @@ class CacheGenerator(object):
 
 
 def get_fields(generator):
+    """
+    Get fields from generator, the field end flags will be influenced by several value, like
+        1. whether is under quote or double quote
+        2. whether is under any types of parens.
+    :param generator:   CacheGenerator to query value from lex token generator.
+    :return:
+    """
     sparen_count = 0
     quote_count = 0
     in_quote = False
@@ -1531,12 +1538,15 @@ def get_fields(generator):
                 elif token.type == "QUOTE":
                     in_quote = True
                     fields_tokens.append(token)
-                elif token.type == "QUOTE":
+                elif token.type == "DOUBLE_QUOTE":
                     in_double_quote = True
                     fields_tokens.append(token)
                 # For the outer RSPAREN, will not save it.
                 elif quote_count == 0 and token.type == "RSPAREN":
                     sparen_count -= 1
+                    if sparen_count == 0:
+                        fields_tokens.append(token)
+
                 elif token.type in left:
                     quote_count += 1
                     fields_tokens.append(token)
@@ -1547,18 +1557,11 @@ def get_fields(generator):
                     fields_tokens.append(token)
                 token = generator.next()
 
+            generator.seek(generator.index - 1)
             if token.type not in ("COMMA", "RPAREN"):
                 # The command fields has multi command, but without SPAREN to include them
                 fields_tokens.extend(get_fields(generator))
-                token = lex.LexToken()
-                if len(fields_tokens) != 0:
-                    token.lineno = fields_tokens[-1].lineno
-                token.type = "LSPAREN"
-                token.value = "]"
-                fields_tokens.append(token)
-                return fields_tokens
-            else:
-                return fields_tokens
+            return fields_tokens
         # Field not start with "[", the end flags are "," and ")"
         # But we still need to concerned about the influence of quotes and parens.
         else:
@@ -1578,7 +1581,7 @@ def get_fields(generator):
                 elif token.type == "QUOTE":
                     in_quote = True
                     fields_tokens.append(token)
-                elif token.type == "QUOTE":
+                elif token.type == "DOUBLE_QUOTE":
                     in_double_quote = True
                     fields_tokens.append(token)
                 elif token.type in left:
@@ -1596,6 +1599,24 @@ def get_fields(generator):
     except StopIteration:
         if sparen_count != 0 or quote_count != 0 or in_quote or in_double_quote:
             raise ParserError
+
+
+def fields_split(generator):
+    """
+    Split the one command arguments line into a list of fields.
+    :param generator:
+    :return:
+    """
+    check_next(generator, "LPAREN")
+    args_fields = []
+    field = get_fields(generator)
+    args_fields.append(field)
+    token = generator.next()
+    while token.type != "RPAREN":
+        field = get_fields(generator)
+        token = generator.next()
+        args_fields.append(field)
+    return args_fields
 
 
 class M4Analyzer(object):
@@ -1682,7 +1703,6 @@ class M4Analyzer(object):
                         token = generator.next()
             except StopIteration:
                 raise ParserError
-
 
     def _defined_macros_analyze(self, generator, macro_name, func_name, level):
         """AC | AM macros we concerned, defined args fields in m4_macros_map."""

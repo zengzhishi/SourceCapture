@@ -821,8 +821,31 @@ def main():
         logger.info("Dumping files need to compile in %s." % file_name)
 
 
+def test_m4_analyzer():
+    if len(sys.argv) != 2:
+        sys.stderr.write("Error!")
+        sys.exit(-1)
+
+    output_path = "./result"
+    logger_path = os.path.join(output_path, "capture.log")
+    parse_logger.addFileHandler(logger_path, "capture")
+    fin = open(sys.argv[1], "r")
+    import capture.utils.m4_macros_analysis as m4_macros_analysis
+    raw_data = fin.read()
+    mylexer = m4_macros_analysis.M4Lexer()
+    mylexer.build()
+    lexer = mylexer.clone()
+    generator = mylexer.get_token_iter(raw_data, lexer=lexer)
+    generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
+    m4_macros_analysis.check_next(generator, "ID")
+    fields = m4_macros_analysis.fields_split(generator)
+    print(fields)
+    print("complete")
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    test_m4_analyzer()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
