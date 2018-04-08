@@ -837,20 +837,20 @@ def test_m4_analyzer():
     lexer = mylexer.clone()
     generator = mylexer.get_token_iter(raw_data, lexer=lexer)
     generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
-    # m4_analyzer = m4_macros_analysis.M4Analyzer()
-    # m4_analyzer.command_analyze(generator, analysis_type="default", func_name="configure_ac",
-    #                             allow_defunc=True, allow_calling=True)
-    try:
-        m4_macros_analysis.analyze(generator, func_name="configure_ac", allow_defunc=True,
-                                   allow_calling=True)
-    except StopIteration:
-        print("At end")
+    m4_analyzer = m4_macros_analysis.M4Analyzer()
+    m4_analyzer.command_analyze(generator, analysis_type="default", func_name="configure_ac",
+                                allow_defunc=True, allow_calling=True)
+    # try:
+    #     m4_macros_analysis.analyze(generator, func_name="configure_ac", allow_defunc=True,
+    #                                allow_calling=True)
+    # except StopIteration:
+    #     print("At end")
     print("complete")
 
 
 if __name__ == "__main__":
-    main()
-    # test_m4_analyzer()
+    # main()
+    test_m4_analyzer()
 
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

@@ -251,6 +251,7 @@ m4_macros_map = {
     "AC_MSG_WARN": ["string", True],
     "AC_HELP_STRING": ["string", True, "string", True],
     "AC_MSG_NOTICE": ["string", True],
+    "AC_LINK_IFELSE": ["string", True, "default", True, "default", False],
 
     "AC_DEFINE_UNQUOTED": ["MACROS", True, "macros_value", False, "string", False],
     "AC_DEFINE": ["MACROS", True, "macros_value", False, "string", False],
@@ -806,7 +807,7 @@ def _calling_to_merge(func_name, funcname_tocall, *args):
 
         (has_default, default_N) = _check_global_dict_empty(dest_var_dict)
         if has_default and var_dict.get("is_replace", False) and len(options) == 0:
-            dest_var_dict[var][default_N] = {
+            dest_var_dict["option"]["default_{}".format(default_N)] = {
                 True: {
                     "defined": var_dict.get("defined", []),
                     "undefined": var_dict.get("undefined", []),
@@ -976,7 +977,7 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                     elif next_token.type == "COMMA":
                         analyze(generator, analysis_type="macros_value", func_name=func_name, level=level + 1)
                         next_token = generator.next()
-                        if next_token == "RPAREN":
+                        if next_token.type == "RPAREN":
                             generator.seek(generator.index - 1)
                         else:
                             analyze(generator, analysis_type="string", func_name=func_name, level=level + 1)
@@ -1507,7 +1508,7 @@ class CacheGenerator(object):
         return self._origin_data
 
 
-def get_fields(generator):
+def get_fields(generator, is_string=False):
     """
     Get fields from generator, the field end flags will be influenced by several value, like
         1. whether is under quote or double quote
@@ -1523,97 +1524,110 @@ def get_fields(generator):
     case_quote_list = []
     try:
         token = generator.next()
-        fields_tokens = [token, ]
-        # field start with '['
-        if token.type == "LSPAREN":
-            # Left the first SPAREN
-            while token.type == "LSPAREN":
-                sparen_count += 1
-                token = generator.next()
-
-            while sparen_count != 0:
-                # Under string flags, in '...' or "..."
-                if in_quote:
-                    if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
-                        in_quote = False
-                    fields_tokens.append(token)
-                elif in_double_quote:
-                    if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
-                        in_double_quote = False
-                    fields_tokens.append(token)
-                # Go into string analysis.
-                elif token.type == "QUOTE":
-                    in_quote = True
-                    fields_tokens.append(token)
-                elif token.type == "DOUBLE_QUOTE":
-                    in_double_quote = True
-                    fields_tokens.append(token)
-                elif token.type == "case":
-                    in_case_count += 1
-                    case_quote_list.append(quote_count)
-                    fields_tokens.append(token)
-                elif token.type == "esac":
-                    if len(case_quote_list) != 0:
-                        quote_count = case_quote_list.pop()
-                    in_case_count -= 1
-                    fields_tokens.append(token)
-                # For the outer RSPAREN, will not save it.
-                elif quote_count == 0 and in_case_count == 0 and token.type == "RSPAREN":
-                    sparen_count -= 1
-                    if sparen_count == 0:
-                        fields_tokens.append(token)
-
-                elif token.type in left:
+        fields_tokens = list()
+        if is_string:
+            ends = ["COMMA", "RPAREN"]
+            while token.type not in ends or quote_count != 0:
+                fields_tokens.append(token)
+                if token.type in left:
                     quote_count += 1
-                    fields_tokens.append(token)
                 elif token.type in right:
                     quote_count -= 1
-                    fields_tokens.append(token)
-                else:
-                    fields_tokens.append(token)
                 token = generator.next()
-
             generator.seek(generator.index - 1)
-            if token.type not in ("COMMA", "RPAREN"):
-                # The command fields has multi command, but without SPAREN to include them
-                fields_tokens.extend(get_fields(generator))
-        # Field not start with "[", the end flags are "," and ")"
-        # But we still need to concerned about the influence of quotes and parens.
         else:
-            while quote_count > 0 or in_quote or in_double_quote \
-                    or in_case_count != 0 or token.type not in ("COMMA", "RPAREN"):
-                if in_quote:
-                    if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
-                        in_quote = False
-                    fields_tokens.append(token)
-                elif in_double_quote:
-                    if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
-                        in_double_quote = False
-                    fields_tokens.append(token)
-                # Go into string analysis.
-                elif token.type == "QUOTE":
-                    in_quote = True
-                    fields_tokens.append(token)
-                elif token.type == "DOUBLE_QUOTE":
-                    in_double_quote = True
-                    fields_tokens.append(token)
-                elif token.type == "case":
-                    in_case_count += 1
-                    fields_tokens.append(token)
-                elif token.type == "esac":
-                    in_case_count -= 1
-                    fields_tokens.append(token)
-                elif token.type in left:
-                    quote_count += 1
-                    fields_tokens.append(token)
-                elif token.type in right:
-                    quote_count -= 1
-                    fields_tokens.append(token)
-                else:
-                    fields_tokens.append(token)
-                token = generator.next()
+            # field start with '['
+            fields_tokens.append(token)
+            if token.type == "LSPAREN":
+                # Left the first SPAREN
+                while token.type == "LSPAREN":
+                    sparen_count += 1
+                    token = generator.next()
 
-            generator.seek(generator.index - 1)
+                while sparen_count != 0:
+                    # Under string flags, in '...' or "..."
+
+                    if in_quote:
+                        if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                            in_quote = False
+                        fields_tokens.append(token)
+                    elif in_double_quote:
+                        if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                            in_double_quote = False
+                        fields_tokens.append(token)
+                    # Go into string analysis.
+                    elif token.type == "QUOTE":
+                        in_quote = True
+                        fields_tokens.append(token)
+                    elif token.type == "DOUBLE_QUOTE":
+                        in_double_quote = True
+                        fields_tokens.append(token)
+                    elif token.type == "case":
+                        in_case_count += 1
+                        case_quote_list.append(quote_count)
+                        fields_tokens.append(token)
+                    elif token.type == "esac":
+                        if len(case_quote_list) != 0:
+                            quote_count = case_quote_list.pop()
+                        in_case_count -= 1
+                        fields_tokens.append(token)
+                    # For the outer RSPAREN, will not save it.
+                    elif quote_count == 0 and in_case_count == 0 and token.type == "RSPAREN":
+                        sparen_count -= 1
+                        if sparen_count == 0:
+                            fields_tokens.append(token)
+
+                    elif token.type in left:
+                        quote_count += 1
+                        fields_tokens.append(token)
+                    elif token.type in right:
+                        quote_count -= 1
+                        fields_tokens.append(token)
+                    else:
+                        fields_tokens.append(token)
+                    token = generator.next()
+
+                generator.seek(generator.index - 1)
+                if token.type not in ("COMMA", "RPAREN"):
+                    # The command fields has multi command, but without SPAREN to include them
+                    fields_tokens.extend(get_fields(generator))
+            # Field not start with "[", the end flags are "," and ")"
+            # But we still need to concerned about the influence of quotes and parens.
+            else:
+                while quote_count > 0 or in_quote or in_double_quote \
+                        or in_case_count != 0 or token.type not in ("COMMA", "RPAREN"):
+                    if in_quote:
+                        if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                            in_quote = False
+                        fields_tokens.append(token)
+                    elif in_double_quote:
+                        if token.type == "DOUBLE_QUOTE" and fields_tokens[-1].type != "BACKSLASH":
+                            in_double_quote = False
+                        fields_tokens.append(token)
+                    # Go into string analysis.
+                    elif token.type == "QUOTE":
+                        in_quote = True
+                        fields_tokens.append(token)
+                    elif token.type == "DOUBLE_QUOTE":
+                        in_double_quote = True
+                        fields_tokens.append(token)
+                    elif token.type == "case":
+                        in_case_count += 1
+                        fields_tokens.append(token)
+                    elif token.type == "esac":
+                        in_case_count -= 1
+                        fields_tokens.append(token)
+                    elif token.type in left:
+                        quote_count += 1
+                        fields_tokens.append(token)
+                    elif token.type in right:
+                        quote_count -= 1
+                        fields_tokens.append(token)
+                    else:
+                        fields_tokens.append(token)
+                    token = generator.next()
+
+                generator.seek(generator.index - 1)
 
         return fields_tokens
     except StopIteration:
@@ -1621,23 +1635,30 @@ def get_fields(generator):
             raise ParserError
 
 
-def fields_split(generator):
+def fields_split(generator, field_defined=None):
     """
     Split the one command arguments line into a list of fields.
     :param generator:
     :return:
     """
+    if not isinstance(field_defined, list):
+        field_defined = list()
     args_fields = []
     token = generator.next()
     # With args
     if token.type == "LPAREN":
-        field = get_fields(generator)
-        args_fields.append(field)
-        token = generator.next()
+        i = 0
         while token.type != "RPAREN":
-            field = get_fields(generator)
-            token = generator.next()
+            is_string = False
+            if 2 * i < len(field_defined):
+                analysis_type = field_defined[2 * i]
+                if analysis_type in ("value", "string", "ID_ENV", "ID_VAR", "call_function"):
+                    is_string = True
+            field = get_fields(generator, is_string)
+            print(field)
             args_fields.append(field)
+            token = generator.next()
+            i += 1
     return args_fields
 
 
@@ -1899,7 +1920,7 @@ class M4Analyzer(object):
             else:
                 raise ParserError("Can't not calling AC_DEFUN here!")
         elif macro_name in ("AC_DEFINE", "AC_DEFINE_UNQUOTED"):
-            fields = fields_split(generator)
+            fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
             if len(fields) < 1:
                 raise ParserError
 
@@ -1924,12 +1945,12 @@ class M4Analyzer(object):
                 "reverse": copy.deepcopy(reverses)
             }
         else:
-            fields = fields_split(generator)
+            fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
             if len(fields) == 0:
                 # Calling function without args.
                 pass
             field_defined = m4_macros_map.get(macro_name, list())
-            if len(fields) > len(field_defined):
+            if len(fields) > len(field_defined) // 2:
                 raise ParserError
 
             for i, field in enumerate(fields):
@@ -1945,7 +1966,7 @@ class M4Analyzer(object):
                 self._calling_to_merge(func_name, macro_name)
 
     def _undefined_macros_analyze(self, generator, macro_name, func_name, level, allow_calling=False):
-        fields = fields_split(generator)
+        fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
         if len(fields) == 0:
             # Calling function without args.
             pass
