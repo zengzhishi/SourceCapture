@@ -240,6 +240,7 @@ class M4Lexer(object):
 # The bool value represent whether this field is essential.
 m4_macros_map = {
     "AC_DEFUN": ["func_name", True, "default", True],
+
     "AC_REQUIRE": ["call_function", True],
     "AC_MSG_CHECKING": ["string", True],
     "AC_MSG_RESULT": ["string", True],
@@ -251,8 +252,8 @@ m4_macros_map = {
     "AC_HELP_STRING": ["string", True, "string", True],
     "AC_MSG_NOTICE": ["string", True],
 
-    # "AC_DEFINE_UNQUOTED": ["MACROS", True, "macros_value", False, "string", False],
-    # "AC_DEFINE": ["MACROS", True, "macros_value", False, "string", False],
+    "AC_DEFINE_UNQUOTED": ["MACROS", True, "macros_value", False, "string", False],
+    "AC_DEFINE": ["MACROS", True, "macros_value", False, "string", False],
 }
 
 left = ['LPAREN', 'LSPAREN', 'LBRACES',]
@@ -1049,9 +1050,9 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
 
                 if next_token.type != "RPAREN":
                     raise ParserError
-                token = generator.next()
                 if allow_calling:
                     _calling_to_merge(func_name, funcname_tocall)
+                token = generator.next()
 
             elif token.type == "ID":
                 # 3. Analyze some assignment line, and skip some line we don't care.
@@ -1087,9 +1088,9 @@ def analyze(generator, analysis_type="default", func_name=None, level=0,
                         next_token = _check_calling_args(generator, func_name, level, allow_calling=allow_calling)
                         if next_token.type != "RPAREN":
                             raise ParserError
-                        token = generator.next()
                         if allow_calling:
                             _calling_to_merge(func_name, funcname_tocall)
+                        token = generator.next()
 
                     else:
                         if token.type == "ID" and next_token.type in ends:
@@ -1501,6 +1502,10 @@ class CacheGenerator(object):
             if 0 <= lineno < len(self._origin_lines) and 0 < end < len(self._origin_lines):
                 return self._origin_lines[lineno, end]
 
+    @property
+    def origin_data(self):
+        return self._origin_data
+
 
 def get_fields(generator):
     """
@@ -1514,12 +1519,14 @@ def get_fields(generator):
     quote_count = 0
     in_quote = False
     in_double_quote = False
+    in_case_count = 0
+    case_quote_list = []
     try:
         token = generator.next()
+        fields_tokens = [token, ]
         # field start with '['
         if token.type == "LSPAREN":
             # Left the first SPAREN
-            fields_tokens = [token, ]
             while token.type == "LSPAREN":
                 sparen_count += 1
                 token = generator.next()
@@ -1541,8 +1548,17 @@ def get_fields(generator):
                 elif token.type == "DOUBLE_QUOTE":
                     in_double_quote = True
                     fields_tokens.append(token)
+                elif token.type == "case":
+                    in_case_count += 1
+                    case_quote_list.append(quote_count)
+                    fields_tokens.append(token)
+                elif token.type == "esac":
+                    if len(case_quote_list) != 0:
+                        quote_count = case_quote_list.pop()
+                    in_case_count -= 1
+                    fields_tokens.append(token)
                 # For the outer RSPAREN, will not save it.
-                elif quote_count == 0 and token.type == "RSPAREN":
+                elif quote_count == 0 and in_case_count == 0 and token.type == "RSPAREN":
                     sparen_count -= 1
                     if sparen_count == 0:
                         fields_tokens.append(token)
@@ -1561,14 +1577,11 @@ def get_fields(generator):
             if token.type not in ("COMMA", "RPAREN"):
                 # The command fields has multi command, but without SPAREN to include them
                 fields_tokens.extend(get_fields(generator))
-            return fields_tokens
         # Field not start with "[", the end flags are "," and ")"
         # But we still need to concerned about the influence of quotes and parens.
         else:
-            fields_tokens = [token, ]
-            token = generator.next()
-            while quote_count != 0 or in_quote or in_double_quote \
-                    or token.type not in ("COMMA", "RPAREN"):
+            while quote_count > 0 or in_quote or in_double_quote \
+                    or in_case_count != 0 or token.type not in ("COMMA", "RPAREN"):
                 if in_quote:
                     if token.type == "QUOTE" and fields_tokens[-1].type != "BACKSLASH":
                         in_quote = False
@@ -1584,6 +1597,12 @@ def get_fields(generator):
                 elif token.type == "DOUBLE_QUOTE":
                     in_double_quote = True
                     fields_tokens.append(token)
+                elif token.type == "case":
+                    in_case_count += 1
+                    fields_tokens.append(token)
+                elif token.type == "esac":
+                    in_case_count -= 1
+                    fields_tokens.append(token)
                 elif token.type in left:
                     quote_count += 1
                     fields_tokens.append(token)
@@ -1595,7 +1614,8 @@ def get_fields(generator):
                 token = generator.next()
 
             generator.seek(generator.index - 1)
-            return fields_tokens
+
+        return fields_tokens
     except StopIteration:
         if sparen_count != 0 or quote_count != 0 or in_quote or in_double_quote:
             raise ParserError
@@ -1607,16 +1627,28 @@ def fields_split(generator):
     :param generator:
     :return:
     """
-    check_next(generator, "LPAREN")
     args_fields = []
-    field = get_fields(generator)
-    args_fields.append(field)
     token = generator.next()
-    while token.type != "RPAREN":
+    # With args
+    if token.type == "LPAREN":
         field = get_fields(generator)
-        token = generator.next()
         args_fields.append(field)
+        token = generator.next()
+        while token.type != "RPAREN":
+            field = get_fields(generator)
+            token = generator.next()
+            args_fields.append(field)
     return args_fields
+
+
+def get_temp_generator(fields, generator):
+    origin_raw_data = generator.origin_data
+
+    def iter(list):
+        for item in list:
+            yield item
+
+    return CacheGenerator(iter(fields), origin_raw_data)
 
 
 class M4Analyzer(object):
@@ -1638,15 +1670,13 @@ class M4Analyzer(object):
         pass
 
     def command_analyze(self, generator, analysis_type="default", func_name=None, level=0,
-                        ends=["RPAREN", "COMMA"], allow_defunc=False, allow_calling=False):
-        logger.debug("# Calling analyzer with type: %s, in function: %s, present level: %d"
-                     % (analysis_type, func_name, level))
-        if isinstance(func_name, str):
-            logger.debug("Functions should be string type.")
+                        ends=None, allow_defunc=False, allow_calling=False):
+        if func_name is None:
+            logger.debug("Functions can't be None type.")
             return
 
-        if func_name not in self.functions:
-            self.functions[func_name] = {
+        if func_name not in functions:
+            functions[func_name] = {
                 "calling": [],
                 "need_condition_var": [],
                 "need_assign_var": [],
@@ -1654,78 +1684,482 @@ class M4Analyzer(object):
                 "export_variables": {},
                 "export_conditions": {}
             }
-        dest_functions = self.functions.get(func_name, dict())
+
+        try:
+            if analysis_type == "default":
+                self._default_analyze(generator, func_name, level + 1, ends=ends,
+                                      allow_defunc=allow_defunc,
+                                      allow_calling=allow_calling)
+            elif analysis_type == "value":
+                return self._value_analyze(generator)
+            elif analysis_type == "string":
+                return self._string_analyze(generator)
+            elif analysis_type == "test":
+                pass
+            elif analysis_type == "call_function":
+                token = generator.next()
+                if token.type != "ID":
+                    raise ParserError
+                name = token.value
+                self._calling_to_merge(func_name, name)
+            elif analysis_type == "ID_ENV":
+                pass
+            elif analysis_type == "ID_VAR":
+                pass
+            elif analysis_type == "HEADERS":
+                self._headers_analyze(generator)
+            else:
+                logger.critical("Unknown analysis_type.")
+                return
+        except StopIteration:
+            logger.critical("No next token, stop command analysis.")
+
+    def _headers_analyze(self, generator):
+        value = []
+        quote_count = 0
+        token = generator.next()
+        while token.type not in ["RSPAREN", "RPAREN"] or quote_count != 0:
+            value.append(token.value)
+            if token.type in left:
+                quote_count += 1
+            elif token.type in right:
+                quote_count -= 1
+
+            try:
+                token = generator.next()
+            except StopIteration:
+                break
+        str_value = "".join(value)
+        self.ac_headers = str_value
+
+    def _default_analyze(self, generator, func_name, level=0, ends=None,
+                              allow_defunc=False, allow_calling=False):
+        if func_name is None:
+            logger.debug("Functions can't be None type.")
+            return
+        if ends is None:
+            ends = ["RPAREN", "COMMA"]
+        dest_functions = functions.get(func_name, dict())
+
+        token = generator.next()
         paren_count = 0
         in_double_quote = False
         in_quote = False
-        roll_back_times = 0
-
-        token = generator.next()
-        if analysis_type == "default":
-            while paren_count > 0 or in_double_quote or in_quote or token.type not in ends:
-                if token.type == "ID" and token.value in m4_macros_map:
-                    pass
-        elif analysis_type == "MACROS":
-            # There may be some illegal format like [[...]] or more parens.
-            # SPAREN will be use to contain arguments.
-            sparen_count = 0
-            while token.type == "LSPAREN":
-                sparen_count += 1
-                token = generator.next()
-
-            macros_name = token.value
-            logger.debug("## Start MACROS analysis, macros name: %s" % macros_name)
-
-            while paren_count != 0:
-                token = generator.next()
-                if in_quote or in_double_quote:
-                    # if last_token.type is
-                    pass
-                elif token.type in left:
-                    paren_count += 1
-                elif token.type in right and paren_count != 0:
-                    paren_count -= 1
-                if token.type == "RSPAREN":
-                    sparen_count -= 1
-
-            to_config.clear()
-            try:
-                token = generator.next()
-                if token.type in ["RSPAREN", "COMMA"]:
-                    to_config.append(macros_name)
+        while paren_count != 0 or in_double_quote or in_quote or token.type not in ends:
+            if token.type == "ID":
+                logger.debug("## Start unknown line analysis, start with: %s" % token)
+                lineno = token.lineno
+                var = token.value
+                if var in m4_macros_map:
+                    print(token)
+                    # Defined function analysis
+                    self._defined_macros_analyze(generator, var, func_name, level + 1,
+                                                 allow_defunc=allow_defunc, allow_calling=allow_calling)
+                next_token = generator.next()
+                if next_token.type == "LPAREN":
+                    print(token)
+                    # Undefined function analysis
+                    generator.seek(generator.index - 1)
+                    self._undefined_macros_analyze(generator, var, func_name, level + 1,
+                                                   allow_calling=allow_calling)
+                elif next_token.type == "ASSIGN" or next_token.type == "APPEND":
+                    # variable assignment analysis
+                    is_assign = True if next_token.type == "ASSIGN" else False
+                    value = _cache_check_assign(generator, var, lineno, next_token.value)
+                    if value is not None:
+                        # TODO: The assignment line actually should be saved.
+                        logger.debug("ASSIGN value: %s=%s" % (var, value))
+                        line = var + "=" + value
+                        variables = functions[func_name]["variables"]
+                        macros_line_analyze(line, variables, generator)
+                    token = generator.next()
                 else:
-                    quote_count = 0
-                    while token.type not in ["RSPAREN", "COMMA"] or quote_count != 0:
+                    #TODO: 还可能是不含参数的函数
+                    #unknown line
+                    if token.type == "ID" and next_token.type in ends:
+                        # Directly break
+                        token = next_token
+                        continue
+                    # When start a new line, we should end up this loop.
+                    one_word_line = True
+                    sub_quotes_count = 0
+                    logger.debug("quote count: %d" % sub_quotes_count)
+                    token = next_token
+                    while (token.type not in ends or sub_quotes_count > 0) \
+                            and token.lineno == lineno:
                         if token.type in left:
-                            quote_count += 1
+                            sub_quotes_count += 1
                         elif token.type in right:
-                            quote_count -= 1
+                            sub_quotes_count -= 1
                         token = generator.next()
-            except StopIteration:
-                raise ParserError
+                        logger.debug("quote count: %d" % sub_quotes_count)
 
-    def _defined_macros_analyze(self, generator, macro_name, func_name, level):
+                    logger.debug("Move outer token: %s" % token)
+
+            elif token.type == "FUNC_ARG":
+                logger.debug("## Start var line analysis %s" % token)
+                lineno = token.lineno
+                next_token = generator.next()
+                if next_token.type in ends:
+                    token = next_token
+                    continue
+
+                # When start a new line, we should end up this loop.
+                sub_quotes_count = 0
+                logger.debug("quote count: %d" % sub_quotes_count)
+
+                token = next_token
+                while (token.type not in ends or sub_quotes_count > 0) \
+                        and token.lineno == lineno:
+                    if token.type in left:
+                        sub_quotes_count += 1
+                    elif token.type in right:
+                        sub_quotes_count -= 1
+                    token = generator.next()
+                    logger.debug("quote count: %d" % sub_quotes_count)
+                logger.debug("Move outer token: %s" % token)
+
+                # Skip part should be added to global quote_count
+                paren_count += sub_quotes_count
+
+            elif token.type == "MACROS":
+                # 4. Analyze Macros assignment line.
+                logger.debug("## Start Macros line analysis %s" % token)
+                line = token.value
+                variables = functions[func_name]["variables"]
+                has_macros = True
+
+                macros_line_analyze(line, variables, generator, is_macros_line=True)
+                token = generator.next()
+
+            elif token.type == "if":
+                logger.debug("## Start if analysis.")
+                status = self._check_sh_if(generator, level, func_name=func_name, allow_calling=allow_calling)
+                if status:
+                    token = generator.next()
+                else:
+                    token.type = "ID"
+                    logger.debug("## End of if analysis fail. Try string analysis.")
+                    continue
+                logger.debug("## End of if analysis pass.")
+
+            elif token.type == "case":
+                logger.debug("## Start case analysis.")
+                self._check_sh_case(generator, level, func_name=func_name, allow_calling=allow_calling)
+                token = generator.next()
+                logger.debug("## End of case analysis.")
+
+            elif token.type in left:
+                logger.debug("## Start quote start line analysis.")
+                lineno = token.lineno
+                paren_count += 1
+                next_token = generator.next()
+                if next_token in ends:
+                    token = next_token
+                    break
+
+                sub_quotes_count = 0
+                logger.debug("quote count: %d" % sub_quotes_count)
+
+                token = next_token
+                while (token.type not in ends or sub_quotes_count > 0) \
+                        and token.lineno == lineno:
+                    if token.type in left:
+                        sub_quotes_count += 1
+                    elif token.type in right:
+                        sub_quotes_count -= 1
+                    token = generator.next()
+                    logger.debug("quote count: %d" % sub_quotes_count)
+                logger.debug("Move outer token: %s" % token)
+                paren_count += sub_quotes_count
+
+            elif token.type in right:
+                paren_count -= 1
+                # logger.debug("/\\ %s %d %s" % (token, quote_count, ends))
+                if paren_count < 1 and token.type in ends:
+                    break
+                token = generator.next()
+
+            else:
+                # 4. Start with some undefined token, we maybe skip it.
+                token = generator.next()
+
+        if token.type in ends:
+            logger.debug("### END CALLING: %s" % token)
+            return
+        else:
+            raise ParserError
+
+    def _defined_macros_analyze(self, generator, macro_name, func_name, level, allow_defunc=False, allow_calling=False):
         """AC | AM macros we concerned, defined args fields in m4_macros_map."""
         if macro_name == "AC_DEFUN":
             logger.debug("## Start defined function analysis.")
-            _check_ac_defunc(generator)
+            if allow_defunc:
+                _check_ac_defunc(generator)
+            else:
+                raise ParserError("Can't not calling AC_DEFUN here!")
         elif macro_name in ("AC_DEFINE", "AC_DEFINE_UNQUOTED"):
-            check_next(generator, "LPAREN")
-            option_name = self.command_analyze(generator, analysis_type="MACROS", func_name=func_name, level=level + 1)
-            next_token = generator.next()
+            fields = fields_split(generator)
+            if len(fields) < 1:
+                raise ParserError
+
+            option_name_gen = get_temp_generator(fields[0], generator)
+            option_name = self._value_analyze(option_name_gen)
 
             value = "1"
-            if next_token.type == "COMMA":
+            if len(fields) > 1:
                 # with default value.
-                value = self.command_analyze(generator, analysis_type="macros_value",
-                                     func_name=func_name, level=level + 1)
-                next_token = generator.next()
+                value_gen = get_temp_generator(fields[1], generator)
+                value = self._macros_value_analyze(value_gen)
 
             description = ""
-            if next_token.type == "COMMA":
-                description = self.command_analyze(generator, analysis_type="string", func_name=func_name,
-                                     level=level + 1)
-                next_token = generator.next()
+            if len(fields) > 2:
+                description_gen = get_temp_generator(fields[2], generator)
+                description = self._string_analyze(description_gen)
+
+            self.config_h[option_name] = {
+                "value": value,
+                "description": description,
+                "option": copy.deepcopy(options),
+                "reverse": copy.deepcopy(reverses)
+            }
+        else:
+            fields = fields_split(generator)
+            if len(fields) == 0:
+                # Calling function without args.
+                pass
+            field_defined = m4_macros_map.get(macro_name, list())
+            if len(fields) > len(field_defined):
+                raise ParserError
+
+            for i, field in enumerate(fields):
+                analysis_type = field_defined[i * 2]
+                is_essential = field_defined[i * 2 + 1]
+                try:
+                    gen = get_temp_generator(field, generator)
+                    self.command_analyze(gen, analysis_type=analysis_type, func_name=func_name,
+                                         level=level + 1, allow_defunc=False)
+                except StopIteration:
+                    logger.debug("Analyze field complete.")
+            if allow_calling:
+                self._calling_to_merge(func_name, macro_name)
+
+    def _undefined_macros_analyze(self, generator, macro_name, func_name, level, allow_calling=False):
+        fields = fields_split(generator)
+        if len(fields) == 0:
+            # Calling function without args.
+            pass
+
+        for field in fields:
+            try:
+                gen = get_temp_generator(field, generator)
+                self._default_analyze(gen, func_name, level=level + 1,
+                                      allow_defunc=False, allow_calling=allow_calling)
+            except StopIteration:
+                logger.debug("Analyze %s field complete." % macro_name)
+
+        if allow_calling:
+            self._calling_to_merge(func_name, macro_name)
+        return
+
+    def _string_analyze(self, generator):
+        logger.debug("## Start string analysis.")
+        return self._value_analyze(generator, ends=["RSPAREN", "RPAREN"])
+
+    def _macros_value_analyze(self, generator):
+        return self._value_analyze(generator)
+
+    def _value_analyze(self, generator, ends=None):
+        if ends is None:
+            ends = ["RSPAREN", "RPAREN", "COMMA"]
+
+        value = []
+        quote_count = 0
+        token = generator.next()
+        # TODO: 需要加上引号的考虑， 或者直接从generator里面提取原文本
+        while token.type not in ends or quote_count != 0:
+            value.append(token.value)
+            if token.type in left:
+                quote_count += 1
+            elif token.type in right:
+                quote_count -= 1
+
+            try:
+                token = generator.next()
+            except StopIteration:
+                break
+        return " ".join(value)
+
+    def _check_sh_if(self, generator, level, func_name=None, allow_calling=False):
+        """Checking 'if... else... ' and update options, and reverses status."""
+        index = generator.index
+        option = _check_bool_expresion(generator)
+        if option is None:
+            logger.debug("This if may be string line.")
+            generator.seek(index)
+            return False
+        options.append(option)
+        reverses.append(False)
+        end_flags = False
+        while not end_flags:
+            self.command_analyze(generator, analysis_type="default", func_name=func_name,
+                                 level=level + 1, ends=["else", "elif", "fi"],
+                                 allow_calling=allow_calling)
+            generator.seek(generator.index - 1)
+            token = generator.next()
+            if token.type == "fi":
+                options.pop()
+                reverses.pop()
+                end_flags = True
+            elif token.type == "else":
+                reverses[-1] = True
+            elif token.type == "elif":
+                option = _check_bool_expresion(generator)
+                options[-1] = option
+                reverses[-1] = False
+            else:
+                raise ParserError
+        return True
+
+    def _check_sh_case(self, generator, level, func_name=None, allow_calling=False):
+        """Checking 'case ...' and update options, and reverses status."""
+        try:
+            token = generator.next()
+            token_list = []
+            while token.type != "in":
+                token_list.append(token.value)
+                token = generator.next()
+            var = "".join(token_list)
+
+            end_flags = False
+            token = generator.next()
+            while not end_flags:
+                token_list = []
+                paren_count = 1
+                while paren_count > 0:
+                    # or token.type != "RPAREN":
+                    token_list.append(token.value)
+                    token = generator.next()
+                    if token.type == "LPAREN":
+                        paren_count += 1
+                    elif token.type == "RPAREN":
+                        paren_count -= 1
+                value = "".join(token_list)
+
+                option = "{} = {}".format(var, value)
+                options.append(option)
+                reverses.append(False)
+                self.command_analyze(generator, analysis_type="default", func_name=func_name, level=level + 1,
+                                     ends=["DOUBLE_SEMICOLON"], allow_calling=allow_calling)
+                options.pop()
+                reverses.pop()
+                token = generator.next()
+
+                if token.type == "esac":
+                    end_flags = True
+            logger.debug("### End of case calling.")
+        except StopIteration:
+            raise ParserError
+
+    def _calling_to_merge(self, func_name, funcname_tocall):
+        """
+            Calling m4 macros and merge variables dict.
+
+            TODO: args can be used to expend macros with arguments.
+        """
+        tocall_function = self.m4_libs.get(funcname_tocall, dict())
+        present_function = self.functions.get(funcname_tocall, dict())
+        if len(tocall_function) == 0 and len(present_function) == 0:
+            logger.debug("{} may be a builtin function or loading fail.".format(funcname_tocall))
+        elif len(present_function) != 0:
+            tocall_function = present_function
+
+        # Step 1: Merge variables for called function and calling function
+        dest_functions = self.functions.get(func_name, dict())
+        dest_variables = dest_functions.get("variables", dict())
+        variables = tocall_function.get("variables", dict())
+        for var in variables:
+            if var not in dest_variables:
+                dest_variables[var] = {
+                    "defined": [],
+                    "undefined": [],
+                    "option": {},
+                    "is_replace": False
+                }
+
+            var_dict = variables.get(var, dict())
+            dest_var_dict = dest_variables.get(var, dict())
+
+            import queue
+            option_queue = queue.Queue()
+
+            (has_default, default_N) = _check_global_dict_empty(dest_var_dict)
+            if has_default and var_dict.get("is_replace", False) and len(options) == 0:
+                dest_var_dict[var][default_N] = {
+                    True: {
+                        "defined": var_dict.get("defined", []),
+                        "undefined": var_dict.get("undefined", []),
+                        "option": {},
+                        "is_replace": False
+                    },
+                    False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+                }
+                for option in var_dict["option"]:
+                    if option not in dest_var_dict["option"]:
+                        dest_var_dict["option"][option] = var_dict["option"][option]
+                    else:
+                        option_queue.put((var_dict["option"][option][True], dest_var_dict["option"][option][True]))
+                        option_queue.put((var_dict["option"][option][False], dest_var_dict["option"][option][False]))
+            else:
+                present_dest_dict = dest_var_dict
+                for (option, reverse) in zip(options, reverses):
+                    if option not in dest_var_dict["option"]:
+                        present_dest_dict["option"][option] = {
+                            True: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+                            False: {"defined": [], "undefined": [], "option": {}, "is_replace": False},
+                        }
+                    present_dest_dict = present_dest_dict["option"][option][not reverse]
+
+                option_queue.put((var_dict, present_dest_dict))
+
+            while not option_queue.empty():
+                try:
+                    (src, dest) = option_queue.get(timeout=0.1)
+                except queue.Empty:
+                    break
+
+                if src.get("is_replace", False):
+                    dest["defined"] = src.get("defined", [])
+                    dest["undefined"] = src.get("undefined", [])
+                else:
+                    dest["defined"].extend(src.get("defined", []))
+                    dest["undefined"].extend(src.get("undefined", []))
+
+                for option in src["option"]:
+                    if option not in dest["option"]:
+                        dest["option"][option] = src["option"][option]
+                    else:
+                        option_queue.put((src["option"][option][True], dest["option"][option][True]))
+                        option_queue.put((src["option"][option][False], dest["option"][option][False]))
+
+        # Step 2: Merge export variables
+        export_vars_dict = tocall_function.get("export_variables", dict())
+        for export_var in export_vars_dict:
+            if "export_variables" not in dest_functions:
+                dest_functions["export_variables"] = dict()
+
+            if export_var not in dest_functions["export_variables"]:
+                dest_functions["export_variables"][export_var] = None
+
+        # Step 3: Merge export conditions
+        export_condition_dict = tocall_function.get("export_conditions", dict())
+        for export_condition in export_condition_dict:
+            if "export_conditions" not in dest_functions:
+                dest_functions["export_conditions"] = dict()
+
+            if export_condition not in dest_functions["export_conditions"]:
+                dest_functions["export_conditions"][export_condition] = None
+        return True
 
 
 if __name__ == "__main__":
