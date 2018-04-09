@@ -5,7 +5,7 @@ Credits
 Development Lead
 ----------------
 
-* Zhishi Zeng <zengzhishi@sbrella.com>
+* Zhishi Zeng <zudaojun@outlook.com>
 
 Contributors
 ------------

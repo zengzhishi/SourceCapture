@@ -2,7 +2,6 @@
 SourceCapture
 =============
 
-
 A compiler command building project.
 
 
@@ -20,6 +19,7 @@ Usage
 使用build_capture.py作为入口，使用时先保证目标扫描项目已经配置完成::
 
     python build_capture.py ${project_root_path} ${result_output_path}
+
 
 其中
 
