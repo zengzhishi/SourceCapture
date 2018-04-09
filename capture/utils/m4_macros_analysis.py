@@ -1733,9 +1733,9 @@ class M4Analyzer(object):
                 token = generator.next()
                 if token.type == "ID" and token.value == "AC_DEFUN":
                     try:
-                        _check_ac_defunc(generator)
+                        self._check_ac_defunc(generator)
                     except ParserError:
-                        logger.warning("Analyze AC FUNCTION fail. Skip the left part.")
+                        logger.debug("Analyze AC FUNCTION fail. Skip the left part.")
                         while token.value != "AC_DEFUN":
                             token = generator.next()
                         generator.seek(generator.index - 1)
@@ -1748,7 +1748,7 @@ class M4Analyzer(object):
                             macros_line_analyze(line, variables, generator)
                     generator.seek(generator.index - 1)
         except StopIteration:
-            logger.warning("File:%s AC_DEFUN analyze complete." % filename)
+            logger.debug("File:%s AC_DEFUN analyze complete." % filename)
             return True
         except:
             logger.error("File:%s AC_DEFUN analyze fail." % filename)
@@ -1800,7 +1800,7 @@ class M4Analyzer(object):
                 logger.critical("Unknown analysis_type.")
                 return
         except StopIteration:
-            logger.critical("No next token, stop command analysis.")
+            logger.debug("No next token, stop command analysis.")
 
     def configure_ac_analyze(self, generator, analysis_type="default", level=0):
         if len(self.functions) != 0:
@@ -1812,7 +1812,6 @@ class M4Analyzer(object):
             "calling": [],
             "need_condition_var": [],
             "need_assign_var": [],
-            # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
             "variables": {},
             "export_variables": {},
             "export_conditions": {}
@@ -1853,7 +1852,7 @@ class M4Analyzer(object):
             return
         if ends is None:
             ends = ["RPAREN", "COMMA"]
-        dest_functions = functions.get(func_name, dict())
+        dest_functions = self.functions.get(func_name, dict())
 
         token = generator.next()
         paren_count = 0
@@ -1865,17 +1864,17 @@ class M4Analyzer(object):
                 lineno = token.lineno
                 var = token.value
                 if var in m4_macros_map:
-                    print(token)
                     # Defined function analysis
                     self._defined_macros_analyze(generator, var, func_name, level + 1,
                                                  allow_defunc=allow_defunc, allow_calling=allow_calling)
                 next_token = generator.next()
                 if next_token.type == "LPAREN":
-                    print(token)
                     # Undefined function analysis
                     generator.seek(generator.index - 1)
                     self._undefined_macros_analyze(generator, var, func_name, level + 1,
                                                    allow_calling=allow_calling)
+                    token = generator.next()
+                    logger.debug("ENNNNNNNN %s" % token)
                 elif next_token.type == "ASSIGN" or next_token.type == "APPEND":
                     # variable assignment analysis
                     is_assign = True if next_token.type == "ASSIGN" else False
@@ -1884,7 +1883,7 @@ class M4Analyzer(object):
                         # TODO: The assignment line actually should be saved.
                         logger.debug("ASSIGN value: %s=%s" % (var, value))
                         line = var + "=" + value
-                        variables = functions[func_name]["variables"]
+                        variables = dest_functions.get("variables", dict())
                         macros_line_analyze(line, variables, generator)
                     token = generator.next()
                 else:
@@ -1940,7 +1939,7 @@ class M4Analyzer(object):
                 # 4. Analyze Macros assignment line.
                 logger.debug("## Start Macros line analysis %s" % token)
                 line = token.value
-                variables = functions[func_name]["variables"]
+                variables = dest_functions.get("variables", dict())
                 has_macros = True
 
                 macros_line_analyze(line, variables, generator, is_macros_line=True)
@@ -2005,6 +2004,7 @@ class M4Analyzer(object):
                 token = generator.next()
 
         if token.type in ends:
+            # generator.seek(generator.index - 1)
             logger.debug("### END CALLING: %s" % token)
             return
         else:
@@ -2015,7 +2015,7 @@ class M4Analyzer(object):
         if macro_name == "AC_DEFUN":
             logger.debug("## Start defined function analysis.")
             if allow_defunc:
-                _check_ac_defunc(generator)
+                self._check_ac_defunc(generator)
             else:
                 raise ParserError("Can't not calling AC_DEFUN here!")
         elif macro_name in ("AC_DEFINE", "AC_DEFINE_UNQUOTED"):
@@ -2056,6 +2056,9 @@ class M4Analyzer(object):
                 analysis_type = field_defined[i * 2]
                 is_essential = field_defined[i * 2 + 1]
                 try:
+                    if len(field) >= 2:
+                        # move out the start-end sparens.
+                        field = field[1:-1] if field[0].type == "LSPAREN" and field[-1].type == "RSPAREN" else field
                     gen = get_temp_generator(field, generator)
                     self.command_analyze(gen, analysis_type=analysis_type, func_name=func_name,
                                          level=level + 1, allow_defunc=False)
@@ -2174,11 +2177,11 @@ class M4Analyzer(object):
 
                 option = "{} = {}".format(var, value)
                 self.options.append(option)
-                reverses.append(False)
+                self.reverses.append(False)
                 self.command_analyze(generator, analysis_type="default", func_name=func_name, level=level + 1,
                                      ends=["DOUBLE_SEMICOLON"], allow_calling=allow_calling)
                 self.options.pop()
-                reverses.pop()
+                self.reverses.pop()
                 token = generator.next()
 
                 if token.type == "esac":
@@ -2236,7 +2239,7 @@ class M4Analyzer(object):
 
             (has_default, default_N) = _check_global_dict_empty(dest_var_dict)
             if has_default and var_dict.get("is_replace", False) and len(options) == 0:
-                dest_var_dict[var][default_N] = {
+                dest_var_dict["option"]["default_{}".format(default_N)] = {
                     True: {
                         "defined": var_dict.get("defined", []),
                         "undefined": var_dict.get("undefined", []),
@@ -2305,8 +2308,13 @@ class M4Analyzer(object):
     def _check_ac_defunc(self, generator):
         """Checking AC_DEFUN field"""
         check_next(generator, "LPAREN")
-        check_next(generator, "LSPAREN")
+        # check_next(generator, "LSPAREN")
+        has_sparen = False
         token = generator.next()
+        if token.type == "LSPAREN":
+            # with paren
+            token = generator.next()
+            has_sparen = True
         if token.type != "ID":
             raise ParserError
         func_name = token.value
@@ -2318,9 +2326,11 @@ class M4Analyzer(object):
             "export_variables": {},
             "export_conditions": {}
         }
-        check_next(generator, "RSPAREN")
+        if has_sparen:
+            check_next(generator, "RSPAREN")
         check_next(generator, "COMMA")
         self.command_analyze(generator, analysis_type="default", func_name=func_name, level=1)
+        generator.seek(generator.index - 1)
         check_next(generator, "RPAREN")
         return
 
