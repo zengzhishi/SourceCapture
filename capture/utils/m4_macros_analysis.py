@@ -39,6 +39,9 @@ reserved = {
     "case": "case",
     "in": "in",
     "esac": "esac",
+    "for": "for",
+    "do": "do",
+    "done": "done",
 }
 
 # C MACROS line will let some right RSPAREN and RPAREN token be recognized as comment line.
@@ -250,6 +253,7 @@ m4_macros_map = {
     "AM_CONDITIONAL": ["ID_ENV", True, "test", False],
     "AC_MSG_WARN": ["string", True],
     "AC_HELP_STRING": ["string", True, "string", True],
+    # "AS_HELP_STRING": ["string", True, "string", True],
     "AC_MSG_NOTICE": ["string", True],
     "AC_LINK_IFELSE": ["string", True, "default", True, "default", False],
 
@@ -432,7 +436,8 @@ def _check_bool_expresion(generator, ends=["then",]):
             generator.seek(generator.index - 1)
             return None
     except StopIteration:
-        raise ParserError
+        logger.warning("This may not be a formal shell if else string.")
+        raise
 
     return " ".join(option_list)
 
@@ -509,11 +514,13 @@ def _check_sh_case(generator, level, func_name=None, allow_calling=False):
         raise ParserError
 
 
-def _cache_check_assign(generator, var, lineno, type="="):
+def _cache_check_assign(generator, var, lineno, type="=", ends=None):
     """
         Assignment or appendage line analysis.
         TODO: Whether we need to save them and using to judge if...test...?
     """
+    if ends is None:
+        ends = ["RPAREN", "COMMA"]
     assignment_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*=\s*([^\s\)\]]*)")
     appendage_regex = re.compile(r"([a-zA-Z_]+[a-zA-Z0-9_]*)\s*\+=\s*([^\s\)\]]*)")
     line = generator.get_line(lineno)
@@ -522,6 +529,11 @@ def _cache_check_assign(generator, var, lineno, type="="):
     value = ""
     try:
         next_token = generator.next()
+        # An empty assignment line without change lines
+        if next_token.type in ends:
+            generator.seek(generator.index - 1)
+            return ""
+
         quote_types = ["DOUBLE_QUOTE", "BACKQUOTE", "QUOTE"]
         if next_token.type in quote_types:
             quote = next_token.value
@@ -585,7 +597,8 @@ def _cache_check_assign(generator, var, lineno, type="="):
 
         return value
     except (StopIteration, ValueError, IndexError):
-        raise ParserError
+        logger.warning("Assignment line analysis fail, return empty value.")
+        return ""
 
 
 def _check_global_dict_empty(dict):
@@ -1458,7 +1471,11 @@ class CacheGenerator(object):
                 self._has_next = False
                 if self._index == len(self._caches) + 1:
                     raise StopIteration
-        data = self._caches[self._index - 1]
+        try:
+            # May be an empty caches
+            data = self._caches[self._index - 1]
+        except IndexError:
+            raise StopIteration
         self._index += 1
         self._set_max()
         logger.debug(data)
@@ -1525,9 +1542,14 @@ def get_fields(generator, is_string=False):
     try:
         token = generator.next()
         fields_tokens = list()
+        # Empty field
+        if token.type in ("COMMA", "RPAREN"):
+            generator.seek(generator.index - 1)
+            return fields_tokens, is_string
+
         if is_string:
             ends = ["COMMA", "RPAREN"]
-            while token.type not in ends or quote_count != 0:
+            while token.type not in ends or quote_count > 0:
                 fields_tokens.append(token)
                 if token.type in left:
                     quote_count += 1
@@ -1537,12 +1559,17 @@ def get_fields(generator, is_string=False):
             generator.seek(generator.index - 1)
         else:
             # field start with '['
-            fields_tokens.append(token)
             if token.type == "LSPAREN":
+                fields_tokens.append(token)
                 # Left the first SPAREN
                 while token.type == "LSPAREN":
                     sparen_count += 1
                     token = generator.next()
+
+                if sparen_count > 1:
+                    # May be insert some c/c++ code here.
+                    generator.seek(generator.index - sparen_count)
+                    return get_fields(generator, is_string=True)
 
                 while sparen_count != 0:
                     # Under string flags, in '...' or "..."
@@ -1590,7 +1617,9 @@ def get_fields(generator, is_string=False):
                 generator.seek(generator.index - 1)
                 if token.type not in ("COMMA", "RPAREN"):
                     # The command fields has multi command, but without SPAREN to include them
-                    fields_tokens.extend(get_fields(generator))
+                    sub_fields, status = get_fields(generator)
+                    is_string = is_string and status
+                    fields_tokens.extend(sub_fields)
             # Field not start with "[", the end flags are "," and ")"
             # But we still need to concerned about the influence of quotes and parens.
             else:
@@ -1629,7 +1658,7 @@ def get_fields(generator, is_string=False):
 
                 generator.seek(generator.index - 1)
 
-        return fields_tokens
+        return fields_tokens, is_string
     except StopIteration:
         if sparen_count != 0 or quote_count != 0 or in_quote or in_double_quote:
             raise ParserError
@@ -1644,6 +1673,7 @@ def fields_split(generator, field_defined=None):
     if not isinstance(field_defined, list):
         field_defined = list()
     args_fields = []
+    analysis_types = []
     token = generator.next()
     # With args
     if token.type == "LPAREN":
@@ -1654,12 +1684,15 @@ def fields_split(generator, field_defined=None):
                 analysis_type = field_defined[2 * i]
                 if analysis_type in ("value", "string", "ID_ENV", "ID_VAR", "call_function"):
                     is_string = True
-            field = get_fields(generator, is_string)
-            print(field)
+            else:
+                analysis_type = "default"
+
+            field, is_string = get_fields(generator, is_string)
             args_fields.append(field)
+            analysis_types.append("string" if is_string else analysis_type)
             token = generator.next()
             i += 1
-    return args_fields
+    return args_fields, analysis_types
 
 
 def get_temp_generator(fields, generator):
@@ -1688,10 +1721,14 @@ class M4Analyzer(object):
         pass
 
     def functions_analyze(self, generator, filename):
+
         pass
 
     def command_analyze(self, generator, analysis_type="default", func_name=None, level=0,
                         ends=None, allow_defunc=False, allow_calling=False):
+
+        logger.debug("# calling analysis with type: " + analysis_type +
+                     " In function: " + func_name + "\tlevel:" + str(level))
         if func_name is None:
             logger.debug("Functions can't be None type.")
             return
@@ -1786,7 +1823,7 @@ class M4Analyzer(object):
                 elif next_token.type == "ASSIGN" or next_token.type == "APPEND":
                     # variable assignment analysis
                     is_assign = True if next_token.type == "ASSIGN" else False
-                    value = _cache_check_assign(generator, var, lineno, next_token.value)
+                    value = _cache_check_assign(generator, var, lineno, next_token.value, ends=ends)
                     if value is not None:
                         # TODO: The assignment line actually should be saved.
                         logger.debug("ASSIGN value: %s=%s" % (var, value))
@@ -1870,6 +1907,12 @@ class M4Analyzer(object):
                 token = generator.next()
                 logger.debug("## End of case analysis.")
 
+            elif token.type == "for":
+                logger.debug("## Start for analysis.")
+                self._check_sh_for(generator, level, func_name=func_name, allow_calling=allow_calling)
+                token = generator.next()
+                logger.debug("## End of for analysis")
+
             elif token.type in left:
                 logger.debug("## Start quote start line analysis.")
                 lineno = token.lineno
@@ -1920,7 +1963,7 @@ class M4Analyzer(object):
             else:
                 raise ParserError("Can't not calling AC_DEFUN here!")
         elif macro_name in ("AC_DEFINE", "AC_DEFINE_UNQUOTED"):
-            fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
+            fields, analysis_types = fields_split(generator, m4_macros_map.get(macro_name, list()))
             if len(fields) < 1:
                 raise ParserError
 
@@ -1945,7 +1988,7 @@ class M4Analyzer(object):
                 "reverse": copy.deepcopy(reverses)
             }
         else:
-            fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
+            fields, analysis_types = fields_split(generator, m4_macros_map.get(macro_name, list()))
             if len(fields) == 0:
                 # Calling function without args.
                 pass
@@ -1966,16 +2009,22 @@ class M4Analyzer(object):
                 self._calling_to_merge(func_name, macro_name)
 
     def _undefined_macros_analyze(self, generator, macro_name, func_name, level, allow_calling=False):
-        fields = fields_split(generator, m4_macros_map.get(macro_name, list()))
+        fields, analysis_types = fields_split(generator, m4_macros_map.get(macro_name, list()))
         if len(fields) == 0:
             # Calling function without args.
             pass
 
-        for field in fields:
+        for field, analysis_type in zip(fields, analysis_types):
             try:
+                if len(field) >= 2:
+                    # move out the start-end sparens.
+                    field = field[1:-1] if field[0].type == "LSPAREN" and field[-1].type == "RSPAREN" else field
                 gen = get_temp_generator(field, generator)
-                self._default_analyze(gen, func_name, level=level + 1,
-                                      allow_defunc=False, allow_calling=allow_calling)
+                if analysis_type == "string":
+                    self._string_analyze(gen)
+                else:
+                    self._default_analyze(gen, func_name, level=level + 1,
+                                          allow_defunc=False, allow_calling=allow_calling)
             except StopIteration:
                 logger.debug("Analyze %s field complete." % macro_name)
 
@@ -2019,7 +2068,7 @@ class M4Analyzer(object):
             logger.debug("This if may be string line.")
             generator.seek(index)
             return False
-        options.append(option)
+        self.options.append(option)
         reverses.append(False)
         end_flags = False
         while not end_flags:
@@ -2029,14 +2078,14 @@ class M4Analyzer(object):
             generator.seek(generator.index - 1)
             token = generator.next()
             if token.type == "fi":
-                options.pop()
+                self.options.pop()
                 reverses.pop()
                 end_flags = True
             elif token.type == "else":
                 reverses[-1] = True
             elif token.type == "elif":
                 option = _check_bool_expresion(generator)
-                options[-1] = option
+                self.options[-1] = option
                 reverses[-1] = False
             else:
                 raise ParserError
@@ -2068,11 +2117,11 @@ class M4Analyzer(object):
                 value = "".join(token_list)
 
                 option = "{} = {}".format(var, value)
-                options.append(option)
+                self.options.append(option)
                 reverses.append(False)
                 self.command_analyze(generator, analysis_type="default", func_name=func_name, level=level + 1,
                                      ends=["DOUBLE_SEMICOLON"], allow_calling=allow_calling)
-                options.pop()
+                self.options.pop()
                 reverses.pop()
                 token = generator.next()
 
@@ -2081,6 +2130,21 @@ class M4Analyzer(object):
             logger.debug("### End of case calling.")
         except StopIteration:
             raise ParserError
+
+    def _check_sh_for(self, generator, level, func_name=None, allow_calling=False):
+        try:
+            token = generator.next()
+            token_list = []
+            while token.type != "do":
+                token_list.append(token.value)
+                token = generator.next()
+
+            self.command_analyze(generator, analysis_type="default", func_name=func_name, level=level + 1,
+                                 ends=["done"], allow_calling=allow_calling)
+            logger.debug("### End of for calling.")
+        except:
+            logger.warning("Error happen in for analysis.")
+            raise
 
     def _calling_to_merge(self, func_name, funcname_tocall):
         """

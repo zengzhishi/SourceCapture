@@ -186,9 +186,11 @@ class AutoToolsParser(object):
         self.load_m4_macros()
         if save_infos:
             self.dump_m4_info()
+
         self.set_configure_ac()
         if save_infos:
             self.dump_ac_info()
+
         self.build_ac_export_infos()
         self.dump_config_h()
         self.set_makefile_am(makefile_ams)
