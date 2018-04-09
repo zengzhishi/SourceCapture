@@ -157,6 +157,7 @@ def format_flags(line, path):
 class AutoToolsParser(object):
     _fhandle_configure_ac = None
     _temp_options = {}
+    _m4_analyzer = None
 
     def __init__(self, project_path, output_path, build_path=None):
         self._project_path = project_path
@@ -168,6 +169,7 @@ class AutoToolsParser(object):
         self.makefile_am_info = {}
         self.config_h = {}
         self.ac_headers = ""
+        self._m4_analyzer = m4_macros_analysis.M4Analyzer()
 
     def __del__(self):
         if self._fhandle_configure_ac:
@@ -461,10 +463,11 @@ class AutoToolsParser(object):
     def _reading_makefile_am(self, am_pair_var, fhandle_am, options=list(), is_in_reverse=list()):
         tmp_line = ""
         option_regexs = (
-            (re.compile("if\s+(.*)"), "positive"),
-            (re.compile("else"), "negative"),
-            (re.compile("endif"), None),
+            (re.compile("^if\s+(.*)"), "positive"),
+            (re.compile("^else"), "negative"),
+            (re.compile("^endif"), None),
         )
+        target_flag = False
         for line in fhandle_am:
             # The \t on the left of the line has command line meaning
             line = tmp_line + " " + line.rstrip(" \t\n") if tmp_line else line.rstrip(" \t\n")
@@ -483,18 +486,26 @@ class AutoToolsParser(object):
                 tmp_line = line[:-1]
                 continue
 
+            # For target define part, our parser will skip them
+            if target_flag and line.startswith("\t"):
+                continue
+            if re.match(r"(.*)\s*:\s+(.*)", line):
+                target_flag = True
+            else:
+                target_flag = False
+
             # Checking option status, to build option flags
             for option_regex, action in option_regexs:
                 match = option_regex.match(line)
                 if match:
-                    if action is None:
-                        options = options[:-1]
-                        is_in_reverse = is_in_reverse[:-1]
-                    elif action == "positive":
+                    if action == "positive":
                         options.append(match.group(1))
                         is_in_reverse.append(False)
-                    else:
+                    elif action == "negative":
                         is_in_reverse[-1] = True
+                    else:
+                        options.pop()
+                        is_in_reverse.pop()
 
             # Checking assignment
             assig_match = assignment_regex.match(line)
@@ -552,6 +563,10 @@ class AutoToolsParser(object):
 
     def loading_include(self, am_pair_var, include_path, options, is_in_reverse):
         """Loading include Makefile file."""
+        if not os.path.exists(include_path):
+            logger.error("Error: file '%s' is not exist!" % include_path)
+            return
+
         with open(include_path, "r") as include_fin:
             self._reading_makefile_am(am_pair_var, include_fin, options, is_in_reverse)
 
@@ -600,19 +615,6 @@ class AutoToolsParser(object):
                 logger.warning("Not found configure.ac or configure.in file")
                 return
 
-        import imp
-        imp.reload(m4_macros_analysis)
-
-        func_name = "configure_ac"
-        m4_macros_analysis.functions[func_name] = {
-           "calling": [],
-           "need_condition_var": [],
-           "need_assign_var": [],
-           "variables": {},
-           # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
-           "export_variables": {},
-           "export_conditions": {}
-        }
         try:
             raw_data = self._fhandle_configure_ac.read()
         except IOError:
@@ -623,16 +625,13 @@ class AutoToolsParser(object):
         generator = mylexer.get_token_iter(raw_data)
         cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
         # self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator)
-        try:
-            # initialize functions
-            m4_macros_analysis.analyze(cache_generator, func_name=func_name,
-                                       analysis_type="default", level=1, allow_defunc=True,
-                                       allow_calling=True)
-        except StopIteration:
-            self.configure_ac_info = m4_macros_analysis.functions
-            self.config_h = m4_macros_analysis.config_h
-            self.ac_headers = m4_macros_analysis.ac_headers
-            logger.info("Reading '%s' complete." % self._fhandle_configure_ac.name)
+        # initialize functions
+        self._m4_analyzer.configure_ac_analyze(generator, level=1)
+
+        self.m4_macros_info = self._m4_analyzer.m4_libs
+        self.configure_ac_info = self._m4_analyzer.functions
+        self.config_h = self._m4_analyzer.config_h
+        self.ac_headers = self._m4_analyzer.ac_headers
 
     def _preload_m4_config(self, configure_ac_filepath):
         """Use shell util to get specific line from configure_ac file, here we search the MACROS dir"""
@@ -668,13 +667,14 @@ class AutoToolsParser(object):
         """Loading m4 file, and building an info map."""
         # imp.reload(m4_macros_analysis)
         raw_data = fin.read()
+
         mylexer = m4_macros_analysis.M4Lexer()
         mylexer.build()
         lexer = mylexer.clone()
         generator = mylexer.get_token_iter(raw_data, lexer=lexer)
         cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
-        self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator, fin.name)
-        return
+
+        self._m4_analyzer.functions_analyze(cache_generator, fin.name)
 
     def load_m4_macros(self):
         """Loading m4 files from m4 directory, and building up macros info table."""
@@ -732,8 +732,9 @@ class AutoToolsParser(object):
             variables = makefile_am.get("variables", dict())
             # step 1.1. check subdir
             subdirs = variables.get("SUBDIRS", list())
-            sub_makefile_ams = map(lambda subpath: os.path.join(self._project_path, subpath, "Makefile.am"),
-                                   subdirs.get("defined", list()))
+            sub_makefile_ams = list(map(lambda subpath: os.path.join(self._project_path, subpath, "Makefile.am"),
+                                   subdirs.get("defined", list())))
+            sub_makefile_ams.append(root_path_makefile)
         else:
             sub_makefile_ams = self.makefile_am_info.keys()
 
@@ -759,6 +760,7 @@ class AutoToolsParser(object):
                         for program_list in program_gen:
                             for program in program_list:
                                 program = program.replace(".", "_")
+                                program = program.replace(os.path.sep, "_")
                                 target[program] = {"type": "program"}
 
                 elif lib_regex.match(key):
@@ -767,6 +769,7 @@ class AutoToolsParser(object):
                         for lib_list in lib_gen:
                             for lib in lib_list:
                                 lib = lib.replace(".", "_")
+                                lib = lib.replace(os.path.sep, "_")
                                 target[lib] = {"type": "lib"}
 
                 elif libtool_regex.match(key):
@@ -775,6 +778,7 @@ class AutoToolsParser(object):
                         for libtool_list in libtool_gen:
                             for libtool in libtool_list:
                                 libtool = libtool.replace(".", "_")
+                                libtool = libtool.replace(os.path.sep, "_")
                                 target[libtool] = {"type": "libtool"}
 
                 else:
@@ -792,7 +796,7 @@ class AutoToolsParser(object):
                 key = target_key + "_SOURCES"
                 logger.info(key)
                 if key not in am_pair_var:
-                    #TODO: 考虑将当前目录下的文件使用这个
+                    #TODO: We can't add files in present directory to sources
                     sources = []
                 else:
                     sources = []

@@ -1721,8 +1721,38 @@ class M4Analyzer(object):
         pass
 
     def functions_analyze(self, generator, filename):
-
-        pass
+        # This function will analyze token flow and concentrates on AC_DEFUN
+        logger.info("checking m4 file: %s" % filename)
+        try:
+            if "other" not in self.functions:
+                self.functions["other"] = {
+                    "variables": {}
+                }
+            others = self.functions.get("other", dict())
+            while generator.has_next():
+                token = generator.next()
+                if token.type == "ID" and token.value == "AC_DEFUN":
+                    try:
+                        _check_ac_defunc(generator)
+                    except ParserError:
+                        logger.warning("Analyze AC FUNCTION fail. Skip the left part.")
+                        while token.value != "AC_DEFUN":
+                            token = generator.next()
+                        generator.seek(generator.index - 1)
+                else:
+                    while token.value != "AC_DEFUN":
+                        token = generator.next()
+                        if token.type == "MACROS":
+                            variables = others.get("variables", dict())
+                            line = token.value
+                            macros_line_analyze(line, variables, generator)
+                    generator.seek(generator.index - 1)
+        except StopIteration:
+            logger.warning("File:%s AC_DEFUN analyze complete." % filename)
+            return True
+        except:
+            logger.error("File:%s AC_DEFUN analyze fail." % filename)
+            return False
 
     def command_analyze(self, generator, analysis_type="default", func_name=None, level=0,
                         ends=None, allow_defunc=False, allow_calling=False):
@@ -1733,8 +1763,8 @@ class M4Analyzer(object):
             logger.debug("Functions can't be None type.")
             return
 
-        if func_name not in functions:
-            functions[func_name] = {
+        if func_name not in self.functions:
+            self.functions[func_name] = {
                 "calling": [],
                 "need_condition_var": [],
                 "need_assign_var": [],
@@ -1771,6 +1801,32 @@ class M4Analyzer(object):
                 return
         except StopIteration:
             logger.critical("No next token, stop command analysis.")
+
+    def configure_ac_analyze(self, generator, analysis_type="default", level=0):
+        if len(self.functions) != 0:
+            self.m4_libs = self.functions
+            self.functions = dict()
+
+        func_name = "configure_ac"
+        self.functions[func_name] = {
+            "calling": [],
+            "need_condition_var": [],
+            "need_assign_var": [],
+            # when program meet AC_SUBST, we will move variable from dict["variables"] to "export_variables" after
+            "variables": {},
+            "export_variables": {},
+            "export_conditions": {}
+        }
+
+        try:
+            self.command_analyze(generator, analysis_type=analysis_type, func_name=func_name,
+                                 level=level, allow_defunc=True, allow_calling=True)
+        except StopIteration:
+            logger.debug("Complete configure_ac command analysis.")
+        except:
+            logger.debug("Error happen in configure_ac command analysis.")
+            return False
+        return True
 
     def _headers_analyze(self, generator):
         value = []
@@ -2245,6 +2301,28 @@ class M4Analyzer(object):
             if export_condition not in dest_functions["export_conditions"]:
                 dest_functions["export_conditions"][export_condition] = None
         return True
+
+    def _check_ac_defunc(self, generator):
+        """Checking AC_DEFUN field"""
+        check_next(generator, "LPAREN")
+        check_next(generator, "LSPAREN")
+        token = generator.next()
+        if token.type != "ID":
+            raise ParserError
+        func_name = token.value
+        self.functions[func_name] = {
+            "calling": [],
+            "need_condition_var": [],
+            "need_assign_var": [],
+            "variables": {},
+            "export_variables": {},
+            "export_conditions": {}
+        }
+        check_next(generator, "RSPAREN")
+        check_next(generator, "COMMA")
+        self.command_analyze(generator, analysis_type="default", func_name=func_name, level=1)
+        check_next(generator, "RPAREN")
+        return
 
 
 if __name__ == "__main__":
