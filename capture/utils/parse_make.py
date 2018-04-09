@@ -6,13 +6,15 @@
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-02-02 14:25:36
     @LastModif: 2018-02-02 14:26:29
-    @Note:  TODO: 完成一般 Makefile 的解析
+    @Note:  make以及gcc命令的解析
 """
 
 import os
 import re
-import subprocess
+import capture.utils.capture_util as capture_util
 
+import logging
+logger = logging.getLogger("capture")
 
 DEFAULT_MAKEFILE_NAME = [
     "Makefile",
@@ -21,10 +23,9 @@ DEFAULT_MAKEFILE_NAME = [
 ]
 
 
-# 使用 make -qp 获取执行的编译命令， 在修改Makefile 执行伪目标获取参数的方法
+# Using make -qp to get compiler commands
 def create_data_base_infos(root_path, output, makefile_name="Makefile", make_args=None):
     """
-    创建info文件
     :param root_path:
     :param output_path:
     :param makefile_name:
@@ -35,25 +36,19 @@ def create_data_base_infos(root_path, output, makefile_name="Makefile", make_arg
     if not os.path.exists(make_file):
         raise IOError("No Makefile in " + root_path)
 
-    cmd = "cd " + root_path + "; make -qp "
+    cmd = "make -qp "
     if make_args:
         cmd += make_args
 
-    print cmd
-
-    p = subprocess.Popen(cmd, shell=True, \
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
-    output.writelines(out)
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=root_path)
+    output.writelines(out.decode("utf-8"))
     return output
 
 
 def block_read(fin):
-    # 去掉block前的空行
     line = fin.readline()
     while not line.strip("\n"):
         line = fin.readline()
-    # 存储block的数据
     lines = []
     while line.strip("\n") != "":
         lines.append(line.strip("\n"))
@@ -62,7 +57,6 @@ def block_read(fin):
 
 
 def search_target_line(lines):
-    """如果有多个配置行，获取EXTRA config，并找到target line"""
     pravite_config_lines = []
     for line in lines:
         config_line_match = re.match("^\w+.*\s*:\s*", line)
@@ -77,24 +71,19 @@ def search_target_line(lines):
 
 def analysis_block(lines):
     """
-    解析块行的配置,得到目标文件所需要的参数
     :param lines:
     :return:
     """
     target_line = 0
-    print lines[0]
-    # 非目标, 可能是依赖文件或内置对象
     if lines[0] == "# Not a target:":
         return {}
     elif lines[0] == '# makefile (from \'Makefile\'':
-        # 可能会导致问题
         target_line += 1
 
     if target_line != 0:
         target_line = search_target_line(lines)
         target, depend = re.split("\s*:\s*", lines[target_line])
     if len(depend) == 0:
-        # 伪目标, 暂时先不管, 后面有需要再完成
         params_dict = {}
     else:
         targets = re.split("\s+", target)
@@ -127,41 +116,33 @@ def analysis_block(lines):
 
 def print_info_analysis(output_path, targets=None):
     """
-    解析文件的内容, 获取目标文件所需要的参数
     :param output_path:
-    :param targets: 如果为None, 则默认把所有非伪目标的编译命令参数都获取回来
+    :param targets:
     :return:
     """
-    fin = open(output_path + "/make_info.txt", "r")
+    fin = open(os.path.join(output_path, "make_info.txt"), "r")
     all_need_params = []
     all_params_dicts = []
     line = fin.readline()
     while line != '':
-        # 1. 先找到目标行
         while line.strip("\n") != '# Files':
             line = fin.readline()
-        # 2. 开始读取配置块
         lines = block_read(fin)
         while lines[-1] != "# VPATH Search Paths":
-            # 3. 解析块
             config_param = analysis_block(lines)
             if len(config_param) == 0:
-                # 非目标
                 pass
             else:
-                # 目标
                 all_params_dicts.append(config_param)
                 for arg in config_param["need_params"]:
                     all_need_params.append(arg)
             lines = block_read(fin)
-        # 3. Files区读取完毕,继续跳过
     return all_params_dicts, all_need_params
 
 
-def modify_makefile(echo_args, root_path, \
+def modify_makefile(echo_args, root_path,
                     makefile, new_makefile, phony_target="capture_echo_values"):
     """
-    复制原来的makefile, 并将参数输出的伪目标语句加入到新的Makefile中, 形成新的makefile
     :param echo_args:
     :param root_path:
     :param makefile:
@@ -174,7 +155,6 @@ def modify_makefile(echo_args, root_path, \
 
 def exec_makefile(new_makefile, field_name):
     """
-    执行修改之后的makefile的伪目标, 并将参数的结果解析之后返回
     :param new_makefile:
     :param field_name:
     :return:
@@ -182,10 +162,7 @@ def exec_makefile(new_makefile, field_name):
     pass
 
 
-# 使用 make -Bnkw 方式获取编译命令的方法
-def create_command_infos(logger, build_path, output, makefile_name=None,
-                 make_args=""):
-    make_file = makefile_name
+def check_makefile(build_path, makefile_name=None):
     is_exist = False
     if not makefile_name:
         for makefile_name in DEFAULT_MAKEFILE_NAME:
@@ -200,77 +177,39 @@ def create_command_infos(logger, build_path, output, makefile_name=None,
         if not os.path.exists(make_file):
             raise IOError("No Makefile in " + build_path)
 
+    return is_exist
+
+
+# Using make -Bnkw to get compiler commands
+def create_command_infos(build_path, output, makefile_name=None,
+                 make_args=""):
+    make_file = makefile_name
+    try:
+        is_exist = check_makefile(build_path, makefile_name)
+    except IOError:
+        logger.warning("Project checking Makefile fail.")
+        return None
+
     if is_exist:
-        cmd = "cd {}; make -nkw {}".format(build_path, make_args)
+        cmd = "make -nkw {}".format(make_args)
     else:
-        cmd = "cd {}; make -nkw -f {} {}".format(build_path, make_file, make_args)
+        cmd = "make -nkw -f {} {}".format(make_file, make_args)
 
-    logger.info("execute command: " + cmd)
-    print cmd
-    p = subprocess.Popen(cmd, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
-    output.writelines(out)
+    (returncode, out, err) = capture_util.subproces_calling(cmd, cwd=build_path)
+    output.write(out.decode("utf8"))
     return output
-
-
-def split_cmd_line(line):
-    # Pass 1: split line using whitespace
-    words = line.strip().split()
-    # Pass 2: merge words so that the no. of quotes is balanced
-    res = []
-    for w in words:
-        # TODO:这里能处理变量里面有空格的情况, 参考使用到cmake的解析中
-        if(len(res) > 0 and unbalanced_quotes(res[-1])):
-            res[-1] += " " + w
-        else:
-            res.append(w)
-    return res
-
-
-def unbalanced_quotes(s):
-    single = 0
-    double = 0
-    excute = 0
-    for c in s:
-        if(c == "'"):
-            single += 1
-        elif(c == '"'):
-            double += 1
-        if(c == "`"):
-            excute += 1
-
-    # 去除转义后的引号带来的影响
-    move_double = s.count('\\"')
-    move_single = s.count("\\'")
-    single -= move_single
-    double -= move_double
-
-    is_half_quote = single % 2 == 1 or double % 2 == 1 or excute % 2 == 1
-    return is_half_quote
-
-
-def strip_quotes(s):
-    if s[0] == "'" and s[-1] == "'":
-        return s[1:-1]
-    elif s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    else:
-        return s
 
 
 def excute_quote_code(s, build_dir):
     s_regax = re.match("`(.*)`(.*)", s)
-    excute_cmd = "cd {}; {}".format(build_dir, s_regax.group(1))
-    p = subprocess.Popen(excute_cmd, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, err = p.communicate()
+    excute_cmd = s_regax.group(1)
+    (returncode, out, err) = capture_util.subproces_calling(excute_cmd, cwd=build_dir)
+    out = out.decode("utf8")
     value = out.strip("\n") + s_regax.group(2)
     return value
 
 
-# TODO: 需要处理一下 -c -o，最终的flags不需要这些, 文件名也不需要加入到flags中
-def parse_flags(logger, build_log_in, build_dir,
+def parse_flags(build_log_in, build_dir,
                 other_cc_compiles=None, other_cxx_compiles=None):
     skip_count = 0
     # Setting compiler regex string
@@ -308,7 +247,7 @@ def parse_flags(logger, build_log_in, build_dir,
         "-[iIDF].*",
         "-std=[a-z0-9+]+",
         "-(no)?std(lib|inc)",
-        "-D([a-zA-Z0-9_]+)=(.*)"
+        "-D([a-zA-Z_][a-zA-Z0-9_]*)=(.*)"
     ]
     flags_whitelist = re.compile("|".join(map("^{}$".format, flags_whitelist)))
 
@@ -328,7 +267,7 @@ def parse_flags(logger, build_log_in, build_dir,
     for line in build_log_in:
         # Concatenate line if need
         accumulate_line = line
-        while (line.endswith('\\\n')):
+        while line.endswith('\\\n'):
             accumulate_line = accumulate_line[:-2]
             line = next(build_log_in, '')
             accumulate_line += line
@@ -336,22 +275,22 @@ def parse_flags(logger, build_log_in, build_dir,
 
         # Parse directory that make entering/leaving
         enter_dir = make_enter_dir.match(line)
-        if (make_enter_dir.match(line)):
+        if make_enter_dir.match(line):
             working_dir = enter_dir.group('dir')
             dir_stack.append(working_dir)
-        elif (make_leave_dir.match(line)):
+        elif make_leave_dir.match(line):
             dir_stack.pop()
             working_dir = dir_stack[-1]
 
-        if (cc_compile_regex.match(line)):
+        if cc_compile_regex.match(line):
             compiler = 'C'
-        elif (cpp_compile_regex.match(line)):
+        elif cpp_compile_regex.match(line):
             compiler = 'CXX'
         else:
             continue
 
         arguments = []
-        words = split_cmd_line(line)[1:]
+        words = capture_util.split_line(line)[1:]
         filepath = None
         line_count += 1
 
@@ -362,20 +301,20 @@ def parse_flags(logger, build_log_in, build_dir,
             if word == "-c":
                 continue
 
-            if (file_regex.match(word)):
+            if file_regex.match(word):
                 filepath = word
 
-            if(word[0] != '-' or not flags_whitelist.match(word)):
+            # make -n output command may have a string "..." as argument, there can insert some flags.
+            if word[0] != '-' or not flags_whitelist.match(word):
                 # phony target
-                word_strip_quotes = strip_quotes(word)
+                word_strip_quotes = capture_util.strip_quotes(word)
                 if word_strip_quotes[0] == '-' and flags_whitelist.match(word_strip_quotes):
-                    # transfer equal value to double quotes
-                    quetos_words = split_cmd_line(word_strip_quotes)
+                    quetos_words = capture_util.split_line(word_strip_quotes)
                     if len(quetos_words) > 1:
                         for (i, quetos_word) in enumerate(quetos_words):
                             if quetos_word[i] in filename_flags and quetos_word[1][0] != '-':
                                 w = quetos_words[i + 1]
-                                if w[0] == '/':
+                                if os.path.isabs(w[0]):
                                     p = w
                                 else:
                                     p = os.path.abspath(working_dir + os.path.sep + w)
@@ -388,14 +327,16 @@ def parse_flags(logger, build_log_in, build_dir,
                         if word_strip_quotes.startswith("-I"):
                             opt = word[0:2]
                             val = word[2:]
-                            if val[0] == '/':
+                            if os.path.isabs(val[0]):
                                 p = val
                             else:
                                 p = os.path.abspath(working_dir + os.path.sep + val)
                             if not invalid_include_regex.match(p):
                                 arguments.append(opt + p)
                         elif word_strip_quotes.startswith("-D"):
-                            definition_with_value = re.compile("^-D([a-zA-Z0-9_]+)=(.*)$")
+                            # When macros flags in quote line, it may have a original format, which can't be compiled
+                            # directly. So we need to add quote for macros with assignment
+                            definition_with_value = re.compile("^-D([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$")
                             definition_with_value_match = definition_with_value.match(word_strip_quotes)
                             if definition_with_value_match:
                                 key = definition_with_value_match.group(1)
@@ -405,11 +346,11 @@ def parse_flags(logger, build_log_in, build_dir,
                             arguments.append(word_strip_quotes)
                 continue
 
-            # include arguments for this option, if there are any, as a tuple
-            if(i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-'):
+            # include arguments for this option
+            if i != len(words) - 1 and word in filename_flags and words[i + 1][0] != '-':
                 w = words[i + 1]
                 # p = w if inc_prefix is None else os.path.join(inc_prefix, w)
-                if w[0] == '/' or words[i] == "-include":
+                if os.path.isabs(w[0]) or words[i] == "-include":
                     p = w
                 else:
                     p = os.path.abspath(working_dir + os.path.sep + w)
@@ -422,8 +363,7 @@ def parse_flags(logger, build_log_in, build_dir,
                 if word.startswith("-I"):
                     opt = word[0:2]
                     val = word[2:]
-                    # p = val if inc_prefix is None else os.path.join(inc_prefix, val)
-                    if val[0] == '/':
+                    if os.path.isabs(val[0]):
                         p = val
                     else:
                         p = os.path.abspath(working_dir + os.path.sep + val)
@@ -437,8 +377,7 @@ def parse_flags(logger, build_log_in, build_dir,
             skip_count += 1
             continue
 
-        # add entry to database
-        logger.info("args={} --> {}".format(len(arguments), filepath))
+        # logger.info("args={} --> {}".format(len(arguments), filepath))
         # arguments.append(filepath)
         # TODO performance: serialize to json file here?
         compile_db.append({
@@ -448,6 +387,6 @@ def parse_flags(logger, build_log_in, build_dir,
             'compiler': compiler
         })
 
-    return (line_count, skip_count, compile_db)
+    return line_count, skip_count, compile_db
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

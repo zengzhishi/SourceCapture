@@ -11,9 +11,9 @@
 
 import sys
 import os
-import Queue
+import queue
 import re
-import lexer_macros
+import capture.core.lexer_macros as lexer_macros
 import subprocess
 
 
@@ -21,10 +21,10 @@ class MacrosAnalyzer(object):
     file_path = ""
     macros = {
         #key: macros_name
-        #value: size(增加代码长度), {headers,}(条件编译内引入的额外头文件), {宏定义嵌套关系?}
+        #value: size
     }
     filter_macros = []
-    queue = Queue.Queue()
+    queue = queue.Queue()
     sub_paths = []
     sys_paths = []
     compiler_type = "C"
@@ -47,7 +47,7 @@ class MacrosAnalyzer(object):
                 cmd = 'echo | gcc -Wp,-v -x c++ - -fsyntax-only 2>&1 | grep "^\ /"'
             else:
                 raise Exception("Unknown compiler type!")
-            p = subprocess.Popen(cmd, shell=True, \
+            p = subprocess.Popen(cmd, shell=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             out, err = p.communicate()
             lines = out.split()
@@ -66,7 +66,6 @@ class MacrosAnalyzer(object):
 
         comment_mark = False
         tmp_line = ""
-        print file_path
 
         for line in filein:
             line = tmp_line + " " + line.strip(" \t\n")
@@ -140,8 +139,6 @@ class MacrosAnalyzer(object):
         filein.close()
 
     def _search_include(self, file_name, paths=None):
-        """在项目环境下查找是否存在"""
-        # TODO: 只在项目环境下查找,如果找到了，则说明需要读取，否则不管（系统头文件的关联起来就太多了）
         if paths is None:
             paths = self.sub_paths
 
@@ -165,7 +162,6 @@ class MacrosAnalyzer(object):
 
     def exclude_macros(self):
         """exclude some macros"""
-        # TODO: 定制一些规则，可以将一些明确不会在当前系统环境下使用到的宏定义去除
         filter_includes = ["winsock2.h"]
         exclude_macros = [
             "__FreeBSD__",
@@ -194,18 +190,16 @@ class MacrosAnalyzer(object):
                     # couldn't found macros include header
                     self.filter_macros.remove(key)
                     break
-        import json
-        #print json.dumps(self.filter_macros)
         line = ""
         for definition in self.filter_macros:
             line += " -D" + definition
         return line
 
     def build_definitions(self):
-        """TODO: 可以定制一种方案讲比较高置信度的组合先返回，采用生成器的方法"""
+        pass
 
     def dump_macros(self):
         import json
-        print json.dumps(self.macros, indent=2)
+        print(json.dumps(self.macros, indent=2))
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent

@@ -1,1 +1,2 @@
-__package__ = "rebuild_compile_unit"
+__version__ = "0.0.1"
+__author__ = "zengzhishi"

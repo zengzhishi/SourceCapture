@@ -6,13 +6,15 @@
     @Author: zengzhishi(zengzs1995@gmail.com)
     @CreatTime: 2018-01-29 17:45:26
     @LastModif: 2018-01-29 19:25:11
-    @Note: 用于解析cmake的文件
+    @Note: CMake Output data analysis.
 """
 
 import re
-import os
+import logging
+import capture.utils.capture_util as capture_util
 
-import types
+
+logger = logging.getLogger("capture")
 
 
 def strip_quotation(string):
@@ -29,7 +31,7 @@ def strip_quotation(string):
 
 def set_analysis(fin):
     """
-    解析DependInfo.cmake文件的set语句设置项
+    Analyze set function in DependInfo.cmake.
     :param fin:
     :return:
     """
@@ -37,33 +39,32 @@ def set_analysis(fin):
     temp_key = ""
     for line in fin:
         line = line.strip(' \t\n')
-        # 跳过注释和空行
+        # Skip comment and empty line
         if len(line) == 0 or line[0] == '#':
             continue
 
-        # 获取带comment的行， 并去除行尾的注释
+        # get line with comment, and remove comment part
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
-            line = re.split("\s+\#", line)[0]
+            line = re.split("\s+#", line)[0]
 
-        # TODO: 暂时这里直接跳过，默认当做cmake产生的文件不会出错，存在隐患
         if line == ")":
             continue
 
-        # 匹配oneline config
-        oneline_result = re.match("set\((\S+)\s+(\S+)\)", line)
+        # match one line config
+        oneline_result = re.match("set\((\S+)\s+(\S+)\)$", line)
         if oneline_result:
             config[oneline_result.group(1)] = strip_quotation(oneline_result.group(2))
             continue
 
-        # 获得到multiline config 的头
+        # match multi-line config
         start_result = re.match("set\((\S+)\s*", line)
         if start_result:
             temp_key = start_result.group(1)
             config[temp_key] = []
             continue
 
-        # 获取配置行
+        # match configure line
         args_result = re.split(r'"\s+"', line)
         if args_result[-1][-1] == ')':
             args_result[-1] = args_result[-1][:-1]
@@ -87,9 +88,60 @@ def set_analysis(fin):
     return config
 
 
+def set_fields_analysis(lines):
+    config = {}
+    for line in lines:
+        fields = re.split(r"\s+", line)
+        if len(fields) == 2:
+            config[fields[0]] = capture_util.strip_quotes(fields[1])
+        elif len(fields) > 2:
+            config[fields[0]] = []
+            for field in fields[1:]:
+                if len(config[fields[0]]) > 0 and capture_util.unbalanced_quotes(config[fields[0]][-1]):
+                    config[fields[0]][-1] += " " + field
+                else:
+                    config[fields[0]].append(field)
+            for i, field in enumerate(config[fields[0]]):
+                assign_regex = re.compile(r"(.+)\s*=\s*(.+)")
+                if assign_regex.match(field):
+                    if field.find(" ") != -1:
+                        field = '{}="{}"'.format(assign_regex.match(field).group(1), assign_regex.match(field).group(2))
+                    if field.find("<") != -1:
+                        field = field.replace("<", "\\<")
+                        field = field.replace(">", "\\>")
+                config[fields[0]][i] = capture_util.strip_quotes(field)
+        else:
+            logger.warning("Analyze set fields: %s fail." % line)
+            continue
+    return config
+
+
+def oneline_set_analysis(fin):
+    set_regex = re.compile(r"set\(\s*(.*?)\s*\)(.*)", flags=re.DOTALL)
+    comment_regex = re.compile(r"#.*?\n(.*)", flags=re.DOTALL)
+    lines = []
+    data = fin.read()
+    data = data.lstrip(" \t\n")
+    while len(data) != 0:
+        comment_match = comment_regex.match(data)
+        set_match = set_regex.match(data)
+        if comment_match:
+            data = comment_match.group(1)
+        elif set_match:
+            lines.append(set_match.group(1))
+            data = set_match.group(2)
+        else:
+            logger.warning("DependInfo analyze fail with an unknown line '%s' in %s." %
+                           (data.split("\n")[0], fin.name))
+            index = data.find("\n")
+            data = data[index:]
+        data = data.lstrip(" \t\n")
+    return set_fields_analysis(lines)
+
+
 def parse_flags(flags_file):
     """
-    解析cmake flags.make文件
+    Analyze cmake flags.make
     :param flags_file:
     :return: final_flags, custom_flags, custom_definitions
     """
@@ -100,11 +152,11 @@ def parse_flags(flags_file):
     custom_flags = {}
     for line in fin:
         line = line.strip(' \t\n')
-        # 跳过注释和空行
+        # Skip comment and empty line
         if len(line) == 0:
             continue
         if line[0] == '#':
-            # 可能是注释行也可能是custom配置行
+            # line start with '#' can be a comment line or custom configure line
             custom_flag = re.match(r"# Custom flags: (.*)_FLAGS = (.*)", line)
             if custom_flag:
                 relative_file_path = custom_flag.group(1)
@@ -120,7 +172,7 @@ def parse_flags(flags_file):
                 file_custom_definitions = re.split(";", custom_definition_data)
                 custom_definitions[relative_file_path] = file_custom_definitions
                 continue
-        # 获取带comment的行， 并去除行尾的注释
+        # Get line with comment, and remove comment part
         setting_line_with_comment = re.match(r".+#\S*", line)
         if setting_line_with_comment:
             line = re.split("\s+\#", line)[0]
@@ -146,19 +198,18 @@ def parse_flags(flags_file):
 
 def parse_cmakeInfo(depen_file):
     """
-    解析DependInfo.cmake文件
-    :param file:    DependInfo.cmake的文件路径
+    Analyze DependInfo.cmake
+    :param file:    DependInfo.cmake file path
     :return: files_s, definitions, includes
     """
     fin = open(depen_file, 'r')
-    config_dict = set_analysis(fin)
+    config_dict = oneline_set_analysis(fin)
 
-    if type(config_dict["CMAKE_DEPENDS_LANGUAGES"]) == types.ListType:
+    if isinstance(config_dict["CMAKE_DEPENDS_LANGUAGES"], list):
         compiler_type = config_dict["CMAKE_DEPENDS_LANGUAGES"]
     else:
         compiler_type = (config_dict["CMAKE_DEPENDS_LANGUAGES"],)
 
-    # 获取不同编译器的配置项
     cmake_infos = []
 
     if "CXX" in compiler_type:
@@ -167,12 +218,15 @@ def parse_cmakeInfo(depen_file):
         include_field_cxx = "CMAKE_CXX_TARGET_INCLUDE_PATH"
         files_cxx, definitions_cxx, includes_cxx = [], [], []
         if source_field_cxx in config_dict:
-            files_cxx = config_dict[source_field_cxx]
+            files_cxx = config_dict[source_field_cxx] if isinstance(config_dict[source_field_cxx], list) \
+                else [config_dict[source_field_cxx],]
             # files_cxx = filter(lambda file: file[-2:] != ".o", files_cxx)
         if definition_field_cxx in config_dict:
-            definitions_cxx = config_dict[definition_field_cxx]
+            definitions_cxx = config_dict[definition_field_cxx] if isinstance(config_dict[definition_field_cxx], list) \
+                else [config_dict[definition_field_cxx],]
         if include_field_cxx in config_dict:
-            includes_cxx = config_dict[include_field_cxx]
+            includes_cxx = config_dict[include_field_cxx] if isinstance(config_dict[include_field_cxx], list) \
+                else [config_dict[include_field_cxx],]
         cmake_infos.append([files_cxx, definitions_cxx, includes_cxx, "CXX"])
 
     if "C" in compiler_type:
@@ -181,12 +235,15 @@ def parse_cmakeInfo(depen_file):
         include_field_c = "CMAKE_C_TARGET_INCLUDE_PATH"
         files_c, definitions_c, includes_c = [], [], []
         if source_field_c in config_dict:
-            files_c = config_dict[source_field_c]
+            files_c = config_dict[source_field_c] if isinstance(config_dict[source_field_c], list) \
+                else [config_dict[source_field_c],]
             # files_c = filter(lambda file: file[-2:] != ".o", files_c)
         if definition_field_c in config_dict:
-            definitions_c = config_dict[definition_field_c]
+            definitions_c = config_dict[definition_field_c] if isinstance(config_dict[definition_field_c], list) \
+                else [config_dict[definition_field_c],]
         if include_field_c in config_dict:
-            includes_c = config_dict[include_field_c]
+            includes_c = config_dict[include_field_c] if isinstance(config_dict[include_field_c], list) \
+                else [config_dict[include_field_c],]
         cmake_infos.append([files_c, definitions_c, includes_c, "C"])
 
     return cmake_infos

@@ -8,10 +8,10 @@
     @LastModif: 2018-01-25 15:01:44
     @Note:
 """
-import pools.building_process as building_process
-#import building_process
+import capture.building_process as building_process
 import multiprocessing
 import time
+
 
 class CommandBuilder(building_process.ProcessBuilder):
     def mission(self, queue, data, locks=[]):
@@ -55,7 +55,6 @@ if __name__ == "__main__":
     import random
     data = [(x, int(random.random() * x)) for x in range(500)]
 
-
     import logging
     logger = logging.Logger("test")
     formatter = logging.Formatter('%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s', '%a, %d %b %Y %H:%M:%S')
@@ -65,7 +64,7 @@ if __name__ == "__main__":
     commandbuilder = CommandBuilder(logger, lock_nums=2)
     commandbuilder.distribute_jobs(data)
     result = commandbuilder.run()
-    print len(result)
 
+    print(result)
 
 # vi:set tw=0 ts=4 sw=4 nowrap fdm=indent
