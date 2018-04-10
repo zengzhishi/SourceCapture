@@ -626,9 +626,8 @@ class AutoToolsParser(object):
         cache_generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
         # self.m4_macros_info = m4_macros_analysis.functions_analyze(cache_generator)
         # initialize functions
-        self._m4_analyzer.configure_ac_analyze(generator, level=1)
+        self._m4_analyzer.configure_ac_analyze(cache_generator)
 
-        self.m4_macros_info = self._m4_analyzer.m4_libs
         self.configure_ac_info = self._m4_analyzer.functions
         self.config_h = self._m4_analyzer.config_h
         self.ac_headers = self._m4_analyzer.ac_headers
@@ -691,16 +690,16 @@ class AutoToolsParser(object):
             with open(file_path) as m4_fin:
                 self._m4_file_analysis(m4_fin)
 
-        # Setup m4 lib for configure.ac to use
-        m4_macros_analysis.m4_libs = self.m4_macros_info
+        self.m4_macros_info = self._m4_analyzer.functions
         logger.info("m4 files loading complete.")
 
     def build_ac_export_infos(self):
         """Setting up export_variables value from variables."""
         if not self.configure_ac_info:
             return
-        export_variables = self.configure_ac_info["configure_ac"]["export_variables"]
-        variables = self.configure_ac_info["configure_ac"]["variables"]
+        configure_ac_dict = self.configure_ac_info.get("configure_ac", dict())
+        export_variables = configure_ac_dict.get("export_variables", dict())
+        variables = configure_ac_dict.get("variables", dict())
         for export_var in export_variables:
             src = variables.get(export_var, dict())
             dest = export_variables.get(export_var, dict())
@@ -938,14 +937,14 @@ class AutoToolsParser(object):
 
         # Ignore default N options
         options = var_dict.get("option", dict())
-        options_key = options.keys()
+        options_key = list(options.keys())
         default_prefix = "default_"
         i = 1
         defaultN = default_prefix + str(i)
         if defaultN in options:
             status = True
             while status:
-                options_key.pop(defaultN)
+                options_key.remove(defaultN)
                 i += 1
                 defaultN = default_prefix + str(i)
                 status = (defaultN in options)
@@ -1069,7 +1068,7 @@ class AutoToolsParser(object):
         :return:
             defined_list:   @list       a list of value has been defined.(without unknown variable.)
         """
-        logger.info("# Start check value: %s" % variable)
+        logger.debug("# Start check value: %s" % variable)
         if variable not in am_pair_var:
             yield [""]
             return
@@ -1082,7 +1081,7 @@ class AutoToolsParser(object):
                 final_var_dict = self._merge_option(option_dict, dict())
                 for opt, level in final_var_tuple:
                     final_var_dict = self._merge_option(opt, final_var_dict)
-                logger.info("final_var_dict: %s" % final_var_dict)
+                logger.debug("final_var_dict: %s" % final_var_dict)
                 undefineds = final_var_dict.get("undefined", list())
                 defineds = final_var_dict.get("defined", list())
 
@@ -1111,7 +1110,7 @@ class AutoToolsParser(object):
             TODO: 获取 configure.ac 中的export的变量
             包含了preset的变量，和使用SUBST导出的变量
         """
-        logger.info("# Start check value:%s from configure_ac" % variable)
+        logger.debug("# Start check value:%s from configure_ac" % variable)
         if ac_var_infos is None:
             ac_infos = self.configure_ac_info.get("configure_ac", dict())
             ac_var_infos = ac_infos.get("variables", dict())
@@ -1138,7 +1137,7 @@ class AutoToolsParser(object):
                 for opt, level in final_var_tuple:
                     final_var_dict = self._merge_option(opt, final_var_dict, False)
                 defineds = final_var_dict.get("defined", list())
-                logger.info("final_var_dict: %s" % final_var_dict)
+                logger.debug("final_var_dict: %s" % final_var_dict)
 
                 # defined with -D will be directly return, don't care about undefined.
                 if re.search(r"\s+-D[a-zA-Z_][a-zA-Z0-9_]*", " " + " ".join(defineds)):

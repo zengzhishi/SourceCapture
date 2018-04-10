@@ -822,27 +822,31 @@ def main():
 
 
 def test_m4_analyzer():
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         sys.stderr.write("Error!")
         sys.exit(-1)
 
+    import capture.utils.m4_macros_analysis as m4_macros_analysis
+    m4_analyzer = m4_macros_analysis.M4Analyzer()
     output_path = "./result"
     logger_path = os.path.join(output_path, "capture.log")
     parse_logger.addFileHandler(logger_path, "capture")
-    fin = open(sys.argv[1], "r")
-    import capture.utils.m4_macros_analysis as m4_macros_analysis
-    raw_data = fin.read()
-    mylexer = m4_macros_analysis.M4Lexer()
-    mylexer.build()
-    lexer = mylexer.clone()
-    generator = mylexer.get_token_iter(raw_data, lexer=lexer)
-    generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
-    m4_analyzer = m4_macros_analysis.M4Analyzer()
-    m4_analyzer.command_analyze(generator, analysis_type="default", func_name="configure_ac",
-                                allow_defunc=True, allow_calling=True)
-    # m4_analyzer.functions_analyze(generator, sys.argv[1])
-    print(m4_analyzer.functions)
-    print("complete")
+
+    for i in sys.argv[1:]:
+        fin = open(i, "r")
+        raw_data = fin.read()
+        mylexer = m4_macros_analysis.M4Lexer()
+        mylexer.build()
+        lexer = mylexer.clone()
+        generator = mylexer.get_token_iter(raw_data, lexer=lexer)
+        generator = m4_macros_analysis.CacheGenerator(generator, origin_data=raw_data)
+        m4_analyzer.command_analyze(generator, analysis_type="default", func_name="configure_ac",
+                                    allow_defunc=True, allow_calling=True)
+        # m4_analyzer.functions_analyze(generator, i)
+        import json
+        with open("./result/m4_info.json", "w") as fout:
+            json.dump(m4_analyzer.functions, fout, indent=4)
+        print("complete %s " % i)
 
 
 if __name__ == "__main__":

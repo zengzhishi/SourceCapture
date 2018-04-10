@@ -775,13 +775,13 @@ class CMakeParser(object):
                         definition_line = " ".join(map("-D{}".format, definitions))
                         flag_line = " ".join(flags)
                         cmd = "{} -c {} -o {} {} {} {}".format(
-                            compiler, os.path.join(dir_name, case), os.path.join(self._build_path, c_case + ".o"),
+                            compiler, os.path.join(dir_name, case), os.path.join(self._build_path, case + ".o"),
                             global_includes_line, definition_line, flag_line
                         )
                         logger.debug(cmd)
                         (returncode, out, err) = capture_util.subproces_calling(cmd, dir_name)
                         if returncode == 0:
-                            logger.info("Try compile for target: %s success." % target_key)
+                            logger.debug("Try compile for target: %s success." % target_key)
                             if compiler_type == "C":
                                 save_status = False if c_compiler_status else True
                                 c_compiler_status = True
